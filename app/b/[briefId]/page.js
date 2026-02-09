@@ -174,7 +174,10 @@ export default function ClientBriefView() {
                           />
                           <div>
                             <div className="font-medium">{item.placementName}</div>
-                            <div className="text-sm text-gray-400">{item.publisherName}</div>
+                            <div className="text-sm text-gray-400">
+                              {item.publisherName}
+                              {item.location && ` • ${item.location}`}
+                            </div>
                           </div>
                         </div>
                         <div className="flex items-center gap-4">
@@ -280,6 +283,12 @@ export default function ClientBriefView() {
                                 <span className="text-gray-400">Publisher</span>
                                 <span>{item.publisherName}</span>
                               </div>
+                              {item.location && (
+                                <div className="flex justify-between">
+                                  <span className="text-gray-400">Location</span>
+                                  <span className="text-right max-w-[150px]">{item.location}</span>
+                                </div>
+                              )}
                               <div className="flex justify-between">
                                 <span className="text-gray-400">State/Region</span>
                                 <span>{item.stateName}</span>
