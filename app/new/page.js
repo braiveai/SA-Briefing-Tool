@@ -41,6 +41,7 @@ export default function NewBrief() {
       publisher: selectedPublisher,
       publisherName: publisher?.name,
       placementName: placement.name,
+      location: placement.location || null,
       format: placement.format,
       specs: placement.specs,
       notes: placement.notes,
@@ -245,8 +246,8 @@ export default function NewBrief() {
                 {/* Placements */}
                 {selectedPublisher && placements.length > 0 && (
                   <div className="animate-fade-in">
-                    <h3 className="text-sm font-medium text-gray-400 mb-3">Available Placements</h3>
-                    <div className="space-y-3">
+                    <h3 className="text-sm font-medium text-gray-400 mb-3">Available Placements ({placements.length})</h3>
+                    <div className="space-y-3 max-h-[500px] overflow-y-auto">
                       {placements.map((placement) => {
                         const isInCart = cart.some(i => i.placementId === placement.id && i.publisher === selectedPublisher);
                         return (
@@ -262,6 +263,9 @@ export default function NewBrief() {
                                     {placement.format}
                                   </span>
                                 </div>
+                                {placement.location && (
+                                  <div className="text-sm text-gray-400 mb-1">📍 {placement.location}</div>
+                                )}
                                 <div className="text-sm text-gray-400 space-y-1">
                                   {placement.specs.dimensions && (
                                     <div>📐 {placement.specs.dimensions}</div>
@@ -301,7 +305,7 @@ export default function NewBrief() {
 
             {/* Right: Cart */}
             <div className="col-span-4">
-              <div className="bg-sunny-gray border border-gray-700 rounded-xl p-6 sticky top-24">
+              <div className="bg-sunny-gray border border-gray-700 rounded-xl p-6 sticky top-24 max-h-[calc(100vh-120px)] overflow-y-auto">
                 <h3 className="font-semibold mb-4">Brief Summary</h3>
                 
                 {cart.length === 0 ? (
@@ -318,33 +322,64 @@ export default function NewBrief() {
                       />
                     </div>
 
-                    <div className="space-y-3 max-h-96 overflow-y-auto">
-                      {cart.map((item) => (
-                        <div
-                          key={item.id}
-                          className="bg-sunny-dark border border-gray-700 rounded-lg p-3 text-sm animate-fade-in"
-                        >
-                          <div className="flex items-start justify-between mb-2">
-                            <div>
-                              <div className="font-medium">{item.placementName}</div>
-                              <div className="text-xs text-gray-400">{item.publisherName}</div>
+                    {/* Grouped by channel */}
+                    <div className="space-y-4">
+                      {(() => {
+                        const grouped = cart.reduce((acc, item) => {
+                          const key = item.channel;
+                          if (!acc[key]) acc[key] = { name: item.channelName, items: [] };
+                          acc[key].items.push(item);
+                          return acc;
+                        }, {});
+
+                        return Object.entries(grouped).map(([channelId, group]) => (
+                          <div key={channelId} className="border border-gray-700 rounded-lg overflow-hidden">
+                            <div className="bg-gray-800 px-3 py-2 flex items-center justify-between">
+                              <span className="font-medium text-sm flex items-center gap-2">
+                                {channelId === 'tv' && '📺'}
+                                {channelId === 'radio' && '📻'}
+                                {channelId === 'ooh' && '🏙️'}
+                                {channelId === 'digital' && '💻'}
+                                {group.name}
+                              </span>
+                              <span className="text-xs bg-sunny-yellow text-black px-2 py-0.5 rounded-full font-medium">
+                                {group.items.length}
+                              </span>
                             </div>
-                            <button
-                              onClick={() => removeFromCart(item.id)}
-                              className="text-gray-500 hover:text-red-400 transition-colors"
-                            >
-                              ✕
-                            </button>
+                            <div className="p-2 space-y-2">
+                              {group.items.map((item) => (
+                                <div
+                                  key={item.id}
+                                  className="bg-sunny-dark border border-gray-700 rounded-lg p-2 text-xs animate-fade-in"
+                                >
+                                  <div className="flex items-start justify-between mb-1.5">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="font-medium text-sm truncate" title={item.placementName}>
+                                        {item.placementName}
+                                      </div>
+                                      <div className="text-gray-400 truncate">
+                                        {item.publisherName} • {item.stateName}
+                                      </div>
+                                    </div>
+                                    <button
+                                      onClick={() => removeFromCart(item.id)}
+                                      className="text-gray-500 hover:text-red-400 transition-colors ml-2 flex-shrink-0"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                  <input
+                                    type="date"
+                                    value={item.dueDate}
+                                    onChange={(e) => updateDueDate(item.id, e.target.value)}
+                                    className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs focus:outline-none focus:border-sunny-yellow"
+                                  />
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                          <input
-                            type="date"
-                            value={item.dueDate}
-                            onChange={(e) => updateDueDate(item.id, e.target.value)}
-                            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-sunny-yellow"
-                            placeholder="Due date"
-                          />
-                        </div>
-                      ))}
+                        ));
+                      })()}
                     </div>
 
                     <button
