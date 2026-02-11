@@ -14,8 +14,7 @@
     "react-dom": "^19.0.0",
     "@vercel/blob": "^0.27.1",
     "openai": "^4.77.0",
-    "xlsx": "^0.18.5",
-    "pdf-parse": "^1.1.1"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "tailwindcss": "^3.4.17",
