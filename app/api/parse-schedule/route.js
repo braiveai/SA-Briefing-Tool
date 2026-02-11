@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx';
 // PDF.js for serverless-compatible PDF extraction
 async function extractFromPDF(buffer) {
   try {
-    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const pdfjsLib = await import('pdfjs-dist');
     
     const loadingTask = pdfjsLib.getDocument({ data: buffer });
     const pdf = await loadingTask.promise;
