@@ -163,8 +163,8 @@ export default function NewBrief() {
         placementId: `imported-${p.siteName}`,
         channel: p.channel || 'ooh',
         channelName: CHANNELS.find(c => c.id === (p.channel || 'ooh'))?.name || 'Out of Home',
-        state: 'imported',
-        stateName: p.location ? extractState(p.location) : 'Imported',
+        state: p.state?.toLowerCase() || 'imported',
+        stateName: p.state || p.suburb || (p.location ? extractState(p.location) : 'Imported'),
         publisher: p.publisher?.toLowerCase().replace(/\s+/g, '-') || 'unknown',
         publisherName: p.publisher || 'Unknown Publisher',
         placementName: p.siteName,
@@ -174,10 +174,14 @@ export default function NewBrief() {
           dimensions: p.dimensions,
           physicalSize: p.physicalSize,
           fileFormat: p.fileFormat,
-          adLength: p.duration ? `${p.duration} seconds` : null,
+          adLength: p.spotLength ? `${p.spotLength} seconds` : (p.duration ? `${p.duration} seconds` : null),
+          dayPart: p.daypart || p.dayPart || null,
+          spotCount: p.spots || p.spotCount || null,
+          panelId: p.panelId || null,
+          direction: p.direction || null,
         },
         notes: p.notes || null,
-        restrictions: p.restrictions ? [p.restrictions] : [],
+        restrictions: p.restrictions ? (Array.isArray(p.restrictions) ? p.restrictions : [p.restrictions]) : [],
         dueDate: p._calculatedDueDate || '',
         flightStart: p.startDate,
         flightEnd: p.endDate,
@@ -568,7 +572,7 @@ export default function NewBrief() {
             <div className="px-6 py-4 border-b border-gray-700 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-semibold">Import Schedule</h2>
-                <p className="text-sm text-gray-400">Upload a media schedule (PDF, Excel, CSV) to auto-populate placements</p>
+                <p className="text-sm text-gray-400">Upload a media schedule (Excel, CSV, PDF) to auto-populate placements</p>
               </div>
               <button
                 onClick={() => {
@@ -590,7 +594,7 @@ export default function NewBrief() {
                   <input
                     ref={importFileRef}
                     type="file"
-                    accept=".pdf,.xlsx,.xls,.csv"
+                    accept=".xlsx,.xls,.csv,.pdf"
                     onChange={handleFileUpload}
                     className="hidden"
                   />
@@ -608,7 +612,7 @@ export default function NewBrief() {
                       <div className="flex flex-col items-center gap-3">
                         <div className="text-4xl">📄</div>
                         <span className="text-lg font-medium">Click to upload schedule</span>
-                        <span className="text-sm text-gray-400">Supports PDF, Excel (.xlsx), and CSV</span>
+                        <span className="text-sm text-gray-400">Supports Excel, CSV, and PDF files</span>
                       </div>
                     )}
                   </button>
@@ -687,13 +691,25 @@ export default function NewBrief() {
                               <span className="text-xs px-2 py-0.5 bg-gray-700 rounded-full">
                                 {p.publisher || 'Unknown'}
                               </span>
+                              {p.channel && (
+                                <span className="text-xs px-2 py-0.5 bg-blue-900 text-blue-300 rounded-full">
+                                  {p.channel.toUpperCase()}
+                                </span>
+                              )}
                             </div>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-400">
                               {p.dimensions && <div>📐 {p.dimensions}</div>}
-                              {p.physicalSize && <div>📏 {p.physicalSize}</div>}
+                              {p.spotLength && <div>⏱️ {p.spotLength} sec</div>}
+                              {p.duration && !p.spotLength && <div>⏱️ {p.duration} sec</div>}
+                              {(p.daypart || p.dayPart) && <div>🕐 {p.daypart || p.dayPart}</div>}
+                              {(p.spots || p.spotCount) && <div>🔢 {p.spots || p.spotCount} spots</div>}
+                              {p.station && <div>📻 {p.station}</div>}
+                              {p.program && <div>📺 {p.program}</div>}
+                              {p.publication && <div>📰 {p.publication}</div>}
+                              {p.adSize && <div>📄 {p.adSize}</div>}
                               {p.startDate && <div>📅 {p.startDate} → {p.endDate}</div>}
                               {p._calculatedDueDate && <div>⏰ Due: {p._calculatedDueDate}</div>}
-                              {p.location && <div className="col-span-2">📍 {p.location}</div>}
+                              {(p.location || p.suburb) && <div className="col-span-2">📍 {p.location || `${p.suburb}, ${p.state}`}</div>}
                               {p.restrictions && p.restrictions !== 'N/A' && (
                                 <div className="col-span-2 text-amber-400">⚠️ {p.restrictions}</div>
                               )}
