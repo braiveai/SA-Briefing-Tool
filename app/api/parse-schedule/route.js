@@ -2,6 +2,32 @@ import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import * as XLSX from 'xlsx';
 
+// PDF.js for serverless-compatible PDF extraction
+async function extractFromPDF(buffer) {
+  try {
+    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    
+    const loadingTask = pdfjsLib.getDocument({ data: buffer });
+    const pdf = await loadingTask.promise;
+    
+    let fullText = [];
+    
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map(item => item.str)
+        .join(' ');
+      fullText.push(`=== Page ${i} ===`);
+      fullText.push(pageText);
+    }
+    
+    return fullText.join('\n');
+  } catch (e) {
+    throw new Error(`Failed to read PDF: ${e.message}`);
+  }
+}
+
 export async function POST(request) {
   const debugInfo = { steps: [] };
 
@@ -47,10 +73,9 @@ export async function POST(request) {
       contentType = 'csv';
       debugInfo.steps.push(`CSV extracted: ${content.length} chars`);
     } else if (fileName.endsWith('.pdf')) {
-      return NextResponse.json({
-        error: 'PDF files are not yet supported. Please convert to Excel (.xlsx) or CSV.',
-        debug: debugInfo
-      }, { status: 400 });
+      content = await extractFromPDF(buffer);
+      contentType = 'pdf';
+      debugInfo.steps.push(`PDF extracted: ${content.length} chars`);
     } else {
       return NextResponse.json({
         error: 'Unsupported file type. Please upload Excel (.xlsx) or CSV.',
