@@ -102,23 +102,20 @@ function extractFromExcel(buffer) {
     const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
     let allText = [];
 
-    for (const sheetName of workbook.SheetNames) {
-      const sheet = workbook.Sheets[sheetName];
-      const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
-      
-      allText.push(`=== Sheet: ${sheetName} ===`);
-      
-      for (const row of data) {
-        const cells = row.map(cell => {
-          if (cell === null || cell === undefined) return '';
-          return String(cell).trim();
-        });
-        const rowText = cells.filter(c => c !== '').join(' | ');
-        if (rowText.trim()) {
-          allText.push(rowText);
-        }
+    // Only process first sheet - that's where booking data usually is
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+    
+    for (const row of data) {
+      const cells = row.map(cell => {
+        if (cell === null || cell === undefined) return '';
+        return String(cell).trim();
+      });
+      const rowText = cells.filter(c => c !== '').join(' | ');
+      if (rowText.trim()) {
+        allText.push(rowText);
       }
-      allText.push('');
     }
 
     return allText.join('\n');
@@ -128,29 +125,32 @@ function extractFromExcel(buffer) {
 }
 
 async function parseWithAI(openai, content, contentType, debugInfo) {
-  const systemPrompt = `Extract media placements from schedules. Return JSON with a "placements" array.
+  const systemPrompt = `Find media placements in this schedule. Return JSON: {"placements": [...]}
 
-Each placement needs: siteName, publisher, dimensions, startDate (YYYY-MM-DD), endDate (YYYY-MM-DD), location, restrictions, channel (ooh/tv/radio/digital), format.
+For each placement found, include ONLY:
+- siteName (the screen/site name)
+- dimensions (pixel size if shown)  
+- startDate (YYYY-MM-DD format)
+- endDate (YYYY-MM-DD format)
 
-Only include fields that have values. Omit null fields to keep response short.
-Infer publisher from site names: LUMO-xxx=LUMO, QMS-xxx=QMS, JCD=JCDecaux.`;
+That's it. Nothing else. Keep it minimal.`;
 
   try {
-    // Truncate if too long
+    // Only send first 10000 chars - we just need to find the key data
     let textContent = content;
-    if (content.length > 12000) {
-      textContent = content.substring(0, 12000) + '\n\n[truncated...]';
+    if (content.length > 10000) {
+      textContent = content.substring(0, 10000);
     }
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Extract all media placements from this schedule. Be concise - only include fields that have values:\n\n${textContent}` }
+        { role: 'user', content: `Find all placements (site names, dimensions, dates):\n\n${textContent}` }
       ],
       response_format: { type: 'json_object' },
       temperature: 0.1,
-      max_tokens: 8000,
+      max_tokens: 16000,
     });
 
     const responseText = response.choices[0].message.content;
@@ -187,25 +187,22 @@ Infer publisher from site names: LUMO-xxx=LUMO, QMS-xxx=QMS, JCD=JCDecaux.`;
     }
 
     if (placements.length === 0) {
-      throw new Error('No placements found. Make sure the file contains a media schedule with site names, dates, and specifications.');
+      throw new Error('No placements found. Make sure the file contains a media schedule with site names and dates.');
     }
 
-    // Normalize placements
-    return placements.map((p, i) => ({
-      siteName: p.siteName || p.site_name || p.name || p.screen || `Placement ${i + 1}`,
-      publisher: p.publisher || inferPublisher(p.siteName || p.name || ''),
-      dimensions: p.dimensions || p.size || p.resolution || null,
-      physicalSize: p.physicalSize || p.physical_size || null,
-      startDate: normalizeDate(p.startDate || p.start_date || p.start),
-      endDate: normalizeDate(p.endDate || p.end_date || p.end),
-      duration: p.duration || p.ad_length || p.adLength || null,
-      fileFormat: p.fileFormat || p.file_format || null,
-      restrictions: p.restrictions || null,
-      location: p.location || p.address || null,
-      notes: p.notes || null,
-      channel: p.channel || 'ooh',
-      format: p.format || 'Digital Billboard',
-    }));
+    // Normalize - infer publisher and other fields from siteName
+    return placements.map((p, i) => {
+      const siteName = p.siteName || p.site_name || p.name || p.screen || `Placement ${i + 1}`;
+      return {
+        siteName,
+        publisher: inferPublisher(siteName),
+        dimensions: p.dimensions || p.size || null,
+        startDate: normalizeDate(p.startDate || p.start_date || p.start),
+        endDate: normalizeDate(p.endDate || p.end_date || p.end),
+        channel: 'ooh',
+        format: 'Digital Billboard',
+      };
+    });
 
   } catch (error) {
     if (error.code === 'invalid_api_key') {
