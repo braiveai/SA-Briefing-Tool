@@ -102,19 +102,22 @@ function extractFromExcel(buffer) {
     const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
     let allText = [];
 
-    // Only process first sheet - that's where booking data usually is
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
-    
-    for (const row of data) {
-      const cells = row.map(cell => {
-        if (cell === null || cell === undefined) return '';
-        return String(cell).trim();
-      });
-      const rowText = cells.filter(c => c !== '').join(' | ');
-      if (rowText.trim()) {
-        allText.push(rowText);
+    // Process ALL sheets - different schedules structure data differently
+    for (const sheetName of workbook.SheetNames) {
+      const sheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+      
+      allText.push(`=== ${sheetName} ===`);
+      
+      for (const row of data) {
+        const cells = row.map(cell => {
+          if (cell === null || cell === undefined) return '';
+          return String(cell).trim();
+        });
+        const rowText = cells.filter(c => c !== '').join(' | ');
+        if (rowText.trim()) {
+          allText.push(rowText);
+        }
       }
     }
 
@@ -127,26 +130,28 @@ function extractFromExcel(buffer) {
 async function parseWithAI(openai, content, contentType, debugInfo) {
   const systemPrompt = `Find media placements in this schedule. Return JSON: {"placements": [...]}
 
-For each placement found, include ONLY:
-- siteName (the screen/site name)
-- dimensions (pixel size if shown)  
-- startDate (YYYY-MM-DD format)
-- endDate (YYYY-MM-DD format)
+For each placement, include ONLY these fields (skip if not found):
+- siteName (screen/site name)
+- dimensions (pixel size)  
+- startDate (YYYY-MM-DD)
+- endDate (YYYY-MM-DD)
+- restrictions (content restrictions like "No alcohol", "No political")
+- location (address if shown)
 
-That's it. Nothing else. Keep it minimal.`;
+Keep it minimal. Data may be spread across multiple sheets.`;
 
   try {
-    // Only send first 10000 chars - we just need to find the key data
+    // Send up to 15000 chars - need room for all sheets
     let textContent = content;
-    if (content.length > 10000) {
-      textContent = content.substring(0, 10000);
+    if (content.length > 15000) {
+      textContent = content.substring(0, 15000);
     }
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Find all placements (site names, dimensions, dates):\n\n${textContent}` }
+        { role: 'user', content: `Find all placements:\n\n${textContent}` }
       ],
       response_format: { type: 'json_object' },
       temperature: 0.1,
@@ -199,6 +204,8 @@ That's it. Nothing else. Keep it minimal.`;
         dimensions: p.dimensions || p.size || null,
         startDate: normalizeDate(p.startDate || p.start_date || p.start),
         endDate: normalizeDate(p.endDate || p.end_date || p.end),
+        restrictions: p.restrictions || null,
+        location: p.location || p.address || null,
         channel: 'ooh',
         format: 'Digital Billboard',
       };
