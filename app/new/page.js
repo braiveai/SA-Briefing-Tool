@@ -92,9 +92,19 @@ export default function NewBrief() {
       });
       
       const data = await res.json();
+      console.log('Parse response:', data);
       
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to parse schedule');
+        // Show detailed error with debug info if available
+        let errorMsg = data.error || 'Failed to parse schedule';
+        if (data.debug?.steps) {
+          console.log('Debug steps:', data.debug.steps);
+        }
+        throw new Error(errorMsg);
+      }
+      
+      if (!data.placements || data.placements.length === 0) {
+        throw new Error('No placements found in the document. Check the file contains schedule data.');
       }
       
       // Add unique IDs and calculate due dates
@@ -108,6 +118,7 @@ export default function NewBrief() {
       setSelectedImports(new Set(placementsWithIds.map(p => p._importId)));
       
     } catch (err) {
+      console.error('Import error:', err);
       setImportError(err.message);
     }
     
@@ -557,7 +568,7 @@ export default function NewBrief() {
             <div className="px-6 py-4 border-b border-gray-700 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-semibold">Import Schedule</h2>
-                <p className="text-sm text-gray-400">Upload a media schedule (PDF, Excel, CSV) to auto-populate placements</p>
+                <p className="text-sm text-gray-400">Upload a media schedule (Excel, CSV) to auto-populate placements</p>
               </div>
               <button
                 onClick={() => {
@@ -579,7 +590,7 @@ export default function NewBrief() {
                   <input
                     ref={importFileRef}
                     type="file"
-                    accept=".pdf,.xlsx,.xls,.csv"
+                    accept=".xlsx,.xls,.csv"
                     onChange={handleFileUpload}
                     className="hidden"
                   />
@@ -597,7 +608,7 @@ export default function NewBrief() {
                       <div className="flex flex-col items-center gap-3">
                         <div className="text-4xl">📄</div>
                         <span className="text-lg font-medium">Click to upload schedule</span>
-                        <span className="text-sm text-gray-400">Supports PDF, Excel (.xlsx), and CSV</span>
+                        <span className="text-sm text-gray-400">Supports Excel (.xlsx) and CSV files</span>
                       </div>
                     )}
                   </button>
