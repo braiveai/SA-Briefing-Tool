@@ -164,8 +164,31 @@ export default function BriefManage() {
                       <tr key={item.id} className="border-b border-gray-700/50 hover:bg-gray-800/30">
                         <td className="px-4 py-3">
                           <div className="font-medium">{item.placementName}</div>
+                          {/* OOH-specific */}
                           {item.specs?.dimensions && (
                             <div className="text-xs text-gray-400">{item.specs.dimensions}</div>
+                          )}
+                          {/* TV/Radio-specific */}
+                          {item.specs?.adLength && (
+                            <div className="text-xs text-gray-400">{item.specs.adLength}</div>
+                          )}
+                          {item.specs?.dayPart && (
+                            <div className="text-xs text-gray-400">{item.specs.dayPart}</div>
+                          )}
+                          {item.specs?.spotCount && (
+                            <div className="text-xs text-gray-400">{item.specs.spotCount} spots</div>
+                          )}
+                          {/* Flight dates */}
+                          {item.flightStart && (
+                            <div className="text-xs text-blue-400">
+                              📅 {item.flightStart} → {item.flightEnd}
+                            </div>
+                          )}
+                          {/* Restrictions warning */}
+                          {item.restrictions && item.restrictions.length > 0 && (
+                            <div className="text-xs text-amber-400" title={Array.isArray(item.restrictions) ? item.restrictions.join(', ') : item.restrictions}>
+                              ⚠️ Has restrictions
+                            </div>
                           )}
                         </td>
                         <td className="px-4 py-3 text-sm">{item.publisherName}</td>
