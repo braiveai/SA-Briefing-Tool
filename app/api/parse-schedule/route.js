@@ -8,7 +8,7 @@ export async function POST(request) {
   try {
     debugInfo.steps.push('Starting request processing');
     
-    // Check for API key
+    // Check for API key first
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({ 
         error: 'OpenAI API key not configured. Add OPENAI_API_KEY to Vercel environment variables and redeploy.',
@@ -16,58 +16,69 @@ export async function POST(request) {
       }, { status: 500 });
     }
     
-    debugInfo.steps.push('API key found');
+    debugInfo.steps.push('API key exists');
 
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    const formData = await request.formData();
+    let formData;
+    try {
+      formData = await request.formData();
+    } catch (e) {
+      return NextResponse.json({ error: 'Invalid form data', debug: debugInfo }, { status: 400 });
+    }
+    
     const file = formData.get('file');
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided', debug: debugInfo }, { status: 400 });
     }
 
-    debugInfo.steps.push(`File received: ${file.name}, size: ${file.size}`);
+    debugInfo.steps.push(`File: ${file.name}, size: ${file.size}, type: ${file.type}`);
 
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
     const fileName = file.name.toLowerCase();
 
-    let extractedText = '';
+    let extractedContent = null;
+    let contentType = 'text';
 
-    // Extract content based on file type
+    // Route based on file type
     if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
-      debugInfo.steps.push('Processing as Excel');
-      extractedText = extractFromExcel(buffer);
-    } else if (fileName.endsWith('.pdf')) {
-      debugInfo.steps.push('Processing as PDF');
-      extractedText = await extractFromPDF(buffer);
+      debugInfo.steps.push('Processing Excel file');
+      extractedContent = extractFromExcel(buffer);
+      contentType = 'text';
     } else if (fileName.endsWith('.csv')) {
-      debugInfo.steps.push('Processing as CSV');
-      extractedText = buffer.toString('utf-8');
+      debugInfo.steps.push('Processing CSV file');
+      extractedContent = buffer.toString('utf-8');
+      contentType = 'text';
+    } else if (fileName.endsWith('.pdf')) {
+      // OpenAI vision doesn't support PDFs directly
+      return NextResponse.json({ 
+        error: 'PDF files are not yet supported. Please convert to Excel (.xlsx) or CSV and try again. Most media schedules are available in Excel format.',
+        debug: debugInfo 
+      }, { status: 400 });
     } else {
       return NextResponse.json({ 
-        error: 'Unsupported file type. Please upload PDF, Excel (.xlsx), or CSV.',
+        error: `Unsupported file type: ${fileName}. Please upload Excel (.xlsx), CSV, or PDF.`,
         debug: debugInfo 
       }, { status: 400 });
     }
 
-    debugInfo.steps.push(`Extracted ${extractedText.length} characters`);
-    debugInfo.extractedPreview = extractedText.substring(0, 500);
-
-    if (!extractedText || extractedText.trim().length < 20) {
+    if (!extractedContent || extractedContent.length < 10) {
       return NextResponse.json({ 
-        error: 'Could not extract enough content from file.',
+        error: 'Could not extract content from file. The file may be empty or corrupted.',
         debug: debugInfo 
       }, { status: 400 });
     }
 
-    // Send to OpenAI for parsing
+    debugInfo.steps.push(`Content extracted: ${contentType}, length: ${extractedContent.length}`);
+
+    // Parse with OpenAI
     debugInfo.steps.push('Calling OpenAI...');
-    const placements = await parseWithAI(openai, extractedText, debugInfo);
-    debugInfo.steps.push(`OpenAI returned ${placements.length} placements`);
+    const placements = await parseWithAI(openai, extractedContent, contentType, debugInfo);
+    debugInfo.steps.push(`Success: ${placements.length} placements found`);
 
     return NextResponse.json({ 
       success: true, 
@@ -76,9 +87,8 @@ export async function POST(request) {
     });
 
   } catch (error) {
-    console.error('Error parsing schedule:', error);
+    console.error('Parse schedule error:', error);
     debugInfo.steps.push(`Error: ${error.message}`);
-    debugInfo.errorStack = error.stack;
     
     return NextResponse.json({ 
       error: error.message || 'Failed to parse schedule',
@@ -88,104 +98,88 @@ export async function POST(request) {
 }
 
 function extractFromExcel(buffer) {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  let allText = [];
+  try {
+    const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+    let allText = [];
 
-  for (const sheetName of workbook.SheetNames) {
-    const sheet = workbook.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-    
-    allText.push(`=== Sheet: ${sheetName} ===`);
-    
-    for (const row of data) {
-      const rowText = row
-        .map(cell => {
+    for (const sheetName of workbook.SheetNames) {
+      const sheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+      
+      allText.push(`=== Sheet: ${sheetName} ===`);
+      
+      for (const row of data) {
+        const cells = row.map(cell => {
           if (cell === null || cell === undefined) return '';
-          if (typeof cell === 'object' && cell instanceof Date) {
-            return cell.toISOString().split('T')[0];
-          }
-          return String(cell);
-        })
-        .filter(cell => cell !== '')
-        .join(' | ');
-      if (rowText.trim()) {
-        allText.push(rowText);
+          return String(cell).trim();
+        });
+        const rowText = cells.filter(c => c !== '').join(' | ');
+        if (rowText.trim()) {
+          allText.push(rowText);
+        }
       }
+      allText.push('');
     }
-    allText.push('');
-  }
 
-  return allText.join('\n');
-}
-
-async function extractFromPDF(buffer) {
-  try {
-    const pdfParse = (await import('pdf-parse/lib/pdf-parse.js')).default;
-    const data = await pdfParse(buffer);
-    return data.text;
-  } catch (error) {
-    console.error('PDF parsing error:', error);
-    throw new Error('Could not parse PDF. Try converting to Excel or CSV first.');
+    return allText.join('\n');
+  } catch (e) {
+    throw new Error(`Failed to read Excel file: ${e.message}`);
   }
 }
 
-async function parseWithAI(openai, text, debugInfo) {
-  // Truncate if too long
-  let processedText = text;
-  if (text.length > 12000) {
-    processedText = text.substring(0, 12000) + '\n\n[... content truncated for length ...]';
-  }
+async function parseWithAI(openai, content, contentType, debugInfo) {
+  const systemPrompt = `Extract media placements from schedules. Return JSON with a "placements" array.
 
-  const systemPrompt = `You extract media placement data from schedules. 
-Always respond with a JSON object containing a "placements" array.
-Each placement object should have: siteName, publisher, dimensions, startDate, endDate, location, restrictions, channel, format.
-Dates should be YYYY-MM-DD format. Channel should be one of: ooh, tv, radio, digital.
-If you can't find certain fields, use null.`;
+Each placement needs: siteName, publisher, dimensions, startDate (YYYY-MM-DD), endDate (YYYY-MM-DD), location, restrictions, channel (ooh/tv/radio/digital), format.
 
-  const userPrompt = `Extract all media placements from this schedule document. 
-Look for site names, screen names, billboard locations, dimensions, dates, and any restrictions.
-Return JSON with a "placements" array.
-
-Document:
-${processedText}`;
+Only include fields that have values. Omit null fields to keep response short.
+Infer publisher from site names: LUMO-xxx=LUMO, QMS-xxx=QMS, JCD=JCDecaux.`;
 
   try {
+    // Truncate if too long
+    let textContent = content;
+    if (content.length > 12000) {
+      textContent = content.substring(0, 12000) + '\n\n[truncated...]';
+    }
+
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
+        { role: 'user', content: `Extract all media placements from this schedule. Be concise - only include fields that have values:\n\n${textContent}` }
       ],
       response_format: { type: 'json_object' },
       temperature: 0.1,
-      max_tokens: 4000,
+      max_tokens: 8000,
     });
 
-    const content = response.choices[0].message.content;
-    debugInfo.steps.push('OpenAI responded');
-    debugInfo.aiResponsePreview = content.substring(0, 300);
+    const responseText = response.choices[0].message.content;
+    const finishReason = response.choices[0].finish_reason;
+    debugInfo.steps.push(`OpenAI responded (finish: ${finishReason})`);
+    debugInfo.responsePreview = responseText.substring(0, 200);
+
+    if (finishReason === 'length') {
+      throw new Error('OpenAI response was truncated. The schedule may be too large. Try uploading a smaller file or contact support.');
+    }
 
     let parsed;
     try {
-      parsed = JSON.parse(content);
+      parsed = JSON.parse(responseText);
     } catch (e) {
-      debugInfo.steps.push('JSON parse failed');
-      debugInfo.rawResponse = content;
-      throw new Error(`Failed to parse OpenAI response: ${e.message}`);
+      debugInfo.rawResponse = responseText;
+      throw new Error('OpenAI returned invalid JSON');
     }
 
-    // Handle various response shapes
+    // Find the placements array
     let placements = [];
     if (Array.isArray(parsed)) {
       placements = parsed;
     } else if (parsed.placements && Array.isArray(parsed.placements)) {
       placements = parsed.placements;
-    } else if (parsed.data && Array.isArray(parsed.data)) {
-      placements = parsed.data;
     } else {
-      // Try to find any array in the response
+      // Search for any array
       for (const key of Object.keys(parsed)) {
-        if (Array.isArray(parsed[key])) {
+        if (Array.isArray(parsed[key]) && parsed[key].length > 0) {
           placements = parsed[key];
           break;
         }
@@ -193,69 +187,61 @@ ${processedText}`;
     }
 
     if (placements.length === 0) {
-      debugInfo.steps.push('No placements found in response');
-      debugInfo.parsedResponse = parsed;
-      throw new Error('No placements found in the document. Make sure the file contains media schedule data.');
+      throw new Error('No placements found. Make sure the file contains a media schedule with site names, dates, and specifications.');
     }
 
-    // Normalize each placement
+    // Normalize placements
     return placements.map((p, i) => ({
-      siteName: p.siteName || p.site_name || p.name || p.screenName || p.screen || `Placement ${i + 1}`,
-      publisher: p.publisher || p.vendor || p.media_owner || inferPublisher(p.siteName || p.name || ''),
-      dimensions: p.dimensions || p.size || p.resolution || p.pixel_size || null,
+      siteName: p.siteName || p.site_name || p.name || p.screen || `Placement ${i + 1}`,
+      publisher: p.publisher || inferPublisher(p.siteName || p.name || ''),
+      dimensions: p.dimensions || p.size || p.resolution || null,
       physicalSize: p.physicalSize || p.physical_size || null,
-      startDate: normalizeDate(p.startDate || p.start_date || p.booking_start || p.start),
-      endDate: normalizeDate(p.endDate || p.end_date || p.booking_end || p.end),
+      startDate: normalizeDate(p.startDate || p.start_date || p.start),
+      endDate: normalizeDate(p.endDate || p.end_date || p.end),
       duration: p.duration || p.ad_length || p.adLength || null,
-      fileFormat: p.fileFormat || p.file_format || p.format_type || null,
-      restrictions: p.restrictions || p.restriction || null,
-      location: p.location || p.address || p.site_address || null,
-      notes: p.notes || p.note || null,
+      fileFormat: p.fileFormat || p.file_format || null,
+      restrictions: p.restrictions || null,
+      location: p.location || p.address || null,
+      notes: p.notes || null,
       channel: p.channel || 'ooh',
-      format: p.format || p.placement_type || 'Digital Billboard',
+      format: p.format || 'Digital Billboard',
     }));
 
   } catch (error) {
     if (error.code === 'invalid_api_key') {
-      throw new Error('Invalid OpenAI API key. Please check your OPENAI_API_KEY in Vercel environment variables.');
+      throw new Error('Invalid OpenAI API key');
     }
     if (error.code === 'insufficient_quota') {
-      throw new Error('OpenAI API quota exceeded. Please check your OpenAI account billing.');
+      throw new Error('OpenAI quota exceeded. Check your billing.');
     }
     throw error;
   }
 }
 
-function inferPublisher(siteName) {
-  const name = (siteName || '').toLowerCase();
-  if (name.includes('lumo')) return 'LUMO';
-  if (name.includes('qms')) return 'QMS';
-  if (name.includes('jcd') || name.includes('jcdecaux')) return 'JCDecaux';
-  if (name.includes('ooh')) return 'oOh! Media';
+function inferPublisher(name) {
+  const lower = (name || '').toLowerCase();
+  if (lower.includes('lumo')) return 'LUMO';
+  if (lower.includes('qms') || lower.startsWith('qm')) return 'QMS';
+  if (lower.includes('jcd') || lower.includes('jcdecaux')) return 'JCDecaux';
+  if (lower.includes('ooh')) return 'oOh! Media';
   return 'Unknown';
 }
 
 function normalizeDate(dateStr) {
   if (!dateStr) return null;
-  
   const str = String(dateStr).trim();
   
-  // Already YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
   
   // DD.MM.YYYY or DD/MM/YYYY
-  const euMatch = str.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/);
-  if (euMatch) {
-    const [, day, month, year] = euMatch;
-    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  const match = str.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/);
+  if (match) {
+    return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
   }
   
-  // Try Date parsing
   try {
-    const date = new Date(str);
-    if (!isNaN(date.getTime())) {
-      return date.toISOString().split('T')[0];
-    }
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
   } catch {}
   
   return null;
