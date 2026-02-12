@@ -10,15 +10,13 @@ export async function GET() {
       blobs.map(async (blob) => {
         try {
           const res = await fetch(blob.url);
-          const data = await res.json();
-          return data;
+          return await res.json();
         } catch {
           return null;
         }
       })
     );
 
-    // Filter out nulls and sort by createdAt desc
     const validBriefs = briefs
       .filter(Boolean)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -34,7 +32,7 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { clientName, campaignName, items, groups } = body;
+    const { clientName, campaignName, items } = body;
 
     if (!clientName || !campaignName) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -43,23 +41,19 @@ export async function POST(request) {
     const id = generateId();
     const now = new Date().toISOString();
 
-    // If no groups provided, auto-generate from items
-    let briefGroups = groups || [];
-    if (briefGroups.length === 0 && items && items.length > 0) {
-      briefGroups = autoGroupItems(items);
-    }
+    // Build channel-grouped structure from items
+    const groups = buildGroups(items || []);
 
     const brief = {
       id,
       clientName,
       campaignName,
       items: items || [],
-      groups: briefGroups,
+      groups, // Channel → Specs hierarchy
       createdAt: now,
       updatedAt: now,
     };
 
-    // Save to blob storage
     await put(`briefs/${id}.json`, JSON.stringify(brief), {
       access: 'public',
       contentType: 'application/json',
@@ -73,6 +67,77 @@ export async function POST(request) {
   }
 }
 
+// ============================================
+// BUILD GROUPS BY CHANNEL → SPECS
+// ============================================
+function buildGroups(items) {
+  const channels = {};
+  
+  items.forEach(item => {
+    const channel = item.channel || 'ooh';
+    
+    // Determine spec key based on channel type
+    let specKey;
+    if (channel === 'radio' || channel === 'tv') {
+      specKey = item.specs?.adLength || item.specs?.spotLength || 'unknown';
+    } else {
+      specKey = item.specs?.dimensions || 'unknown';
+    }
+    
+    const groupId = `${channel}-${specKey}`;
+    
+    if (!channels[channel]) {
+      channels[channel] = {
+        channel,
+        specs: {},
+      };
+    }
+    
+    if (!channels[channel].specs[specKey]) {
+      channels[channel].specs[specKey] = {
+        id: groupId,
+        specKey,
+        label: specKey,
+        channel,
+        channelName: item.channelName,
+        publisher: item.publisherName,
+        placements: [],
+        minStart: null,
+        maxEnd: null,
+        earliestDue: null,
+        status: 'briefed',
+      };
+    }
+    
+    const spec = channels[channel].specs[specKey];
+    spec.placements.push(item);
+    
+    // Update date ranges
+    if (item.flightStart) {
+      if (!spec.minStart || item.flightStart < spec.minStart) {
+        spec.minStart = item.flightStart;
+      }
+    }
+    if (item.flightEnd) {
+      if (!spec.maxEnd || item.flightEnd > spec.maxEnd) {
+        spec.maxEnd = item.flightEnd;
+      }
+    }
+    if (item.dueDate) {
+      if (!spec.earliestDue || item.dueDate < spec.earliestDue) {
+        spec.earliestDue = item.dueDate;
+      }
+    }
+  });
+  
+  // Convert to array format for storage
+  // Structure: { channel: 'ooh', specs: [...] }
+  return Object.values(channels).map(ch => ({
+    channel: ch.channel,
+    specs: Object.values(ch.specs),
+  }));
+}
+
 function generateId() {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let id = '';
@@ -80,42 +145,4 @@ function generateId() {
     id += chars[Math.floor(Math.random() * chars.length)];
   }
   return id;
-}
-
-function autoGroupItems(items) {
-  const groups = {};
-  
-  items.forEach(item => {
-    const groupId = item.creativeGroupId || `${item.channel}-${item.specs?.dimensions || 'default'}`;
-    
-    if (!groups[groupId]) {
-      groups[groupId] = {
-        id: groupId,
-        name: item.creativeGroupName || item.specs?.dimensions || 'Group',
-        channel: item.channel,
-        channelName: item.channelName,
-        specs: item.specs,
-        placements: [],
-        earliestDue: null,
-        minStart: null,
-        maxEnd: null,
-        status: 'briefed',
-      };
-    }
-    
-    groups[groupId].placements.push(item);
-    
-    // Update dates
-    if (item.dueDate && (!groups[groupId].earliestDue || item.dueDate < groups[groupId].earliestDue)) {
-      groups[groupId].earliestDue = item.dueDate;
-    }
-    if (item.flightStart && (!groups[groupId].minStart || item.flightStart < groups[groupId].minStart)) {
-      groups[groupId].minStart = item.flightStart;
-    }
-    if (item.flightEnd && (!groups[groupId].maxEnd || item.flightEnd > groups[groupId].maxEnd)) {
-      groups[groupId].maxEnd = item.flightEnd;
-    }
-  });
-  
-  return Object.values(groups);
 }
