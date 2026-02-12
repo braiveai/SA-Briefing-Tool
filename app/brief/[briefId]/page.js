@@ -3,32 +3,319 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
-// Channel colors
-const CHANNEL_COLORS = {
-  ooh: { bg: 'bg-blue-500', border: 'border-blue-400', light: 'bg-blue-500/20', text: 'text-blue-400' },
-  tv: { bg: 'bg-purple-500', border: 'border-purple-400', light: 'bg-purple-500/20', text: 'text-purple-400' },
-  radio: { bg: 'bg-amber-500', border: 'border-amber-400', light: 'bg-amber-500/20', text: 'text-amber-400' },
-  digital: { bg: 'bg-green-500', border: 'border-green-400', light: 'bg-green-500/20', text: 'text-green-400' },
+// ============================================
+// CHANNEL CONFIG
+// ============================================
+const CHANNELS = {
+  ooh: { 
+    name: 'Out of Home', 
+    icon: '📍',
+    gradient: 'from-blue-500 to-blue-600',
+  },
+  tv: { 
+    name: 'Television', 
+    icon: '📺',
+    gradient: 'from-purple-500 to-purple-600',
+  },
+  radio: { 
+    name: 'Radio', 
+    icon: '📻',
+    gradient: 'from-amber-500 to-amber-600',
+  },
+  digital: { 
+    name: 'Digital', 
+    icon: '💻',
+    gradient: 'from-green-500 to-green-600',
+  },
 };
 
-// Status colors and labels
-const STATUS_CONFIG = {
-  briefed: { label: 'Briefed', color: 'bg-gray-500', icon: '📋' },
-  in_progress: { label: 'In Progress', color: 'bg-blue-500', icon: '🎨' },
-  review: { label: 'In Review', color: 'bg-amber-500', icon: '👀' },
-  approved: { label: 'Approved', color: 'bg-green-500', icon: '✅' },
-  delivered: { label: 'Delivered', color: 'bg-purple-500', icon: '🚀' },
-};
+// ============================================
+// STATUS TRACK CONFIG
+// ============================================
+const STATUS_STEPS = [
+  { key: 'briefed', label: 'Briefed' },
+  { key: 'in_progress', label: 'In Progress' },
+  { key: 'review', label: 'Review' },
+  { key: 'approved', label: 'Approved' },
+  { key: 'delivered', label: 'Delivered' },
+];
 
+// ============================================
+// VISUAL DIMENSION PREVIEW COMPONENT
+// ============================================
+function DimensionPreview({ dimensions, channel }) {
+  // For radio/tv, show duration visualization instead
+  if (channel === 'radio' || channel === 'tv') {
+    const seconds = parseInt(dimensions) || 30;
+    const bars = Math.min(Math.ceil(seconds / 5), 12); // 1 bar per 5 seconds, max 12
+    
+    return (
+      <div className="w-16 h-12 flex items-end justify-center gap-0.5">
+        {Array.from({ length: bars }).map((_, i) => (
+          <div
+            key={i}
+            className="w-1 bg-gradient-to-t from-amber-500 to-amber-300 rounded-full"
+            style={{ 
+              height: `${30 + Math.sin(i * 0.8) * 20 + Math.random() * 20}%`,
+              opacity: 0.6 + (i / bars) * 0.4
+            }}
+          />
+        ))}
+      </div>
+    );
+  }
+  
+  // For OOH/digital, show proportional rectangle
+  if (!dimensions) {
+    return (
+      <div className="w-16 h-12 rounded bg-white/10 flex items-center justify-center">
+        <span className="text-white/30 text-xs">?</span>
+      </div>
+    );
+  }
+  
+  // Parse dimensions like "952x252 px" or "1080x1920"
+  const match = dimensions.match(/(\d+)\s*[x×]\s*(\d+)/i);
+  if (!match) {
+    return (
+      <div className="w-16 h-12 rounded bg-white/10 flex items-center justify-center">
+        <span className="text-white/30 text-xs">?</span>
+      </div>
+    );
+  }
+  
+  const [, w, h] = match;
+  const width = parseInt(w);
+  const height = parseInt(h);
+  const aspectRatio = width / height;
+  
+  // Container is 64x48 (w-16 h-12)
+  // Scale to fit while maintaining aspect ratio
+  const containerW = 64;
+  const containerH = 48;
+  
+  let rectW, rectH;
+  if (aspectRatio > containerW / containerH) {
+    // Width constrained
+    rectW = containerW;
+    rectH = containerW / aspectRatio;
+  } else {
+    // Height constrained
+    rectH = containerH;
+    rectW = containerH * aspectRatio;
+  }
+  
+  return (
+    <div className="w-16 h-12 flex items-center justify-center">
+      <div 
+        className="bg-gradient-to-br from-blue-400 to-blue-600 rounded-sm shadow-lg shadow-blue-500/20"
+        style={{ width: `${rectW}px`, height: `${rectH}px` }}
+      />
+    </div>
+  );
+}
+
+// ============================================
+// STATUS TRACK COMPONENT
+// ============================================
+function StatusTrack({ currentStatus, onChange, groupId }) {
+  const currentIndex = STATUS_STEPS.findIndex(s => s.key === currentStatus);
+  const [hoveredIndex, setHoveredIndex] = useState(null);
+  
+  return (
+    <div className="flex items-center gap-1">
+      {STATUS_STEPS.map((step, idx) => {
+        const isFilled = idx <= currentIndex;
+        const isHovered = hoveredIndex !== null && idx <= hoveredIndex;
+        const showLabel = hoveredIndex === idx;
+        
+        return (
+          <div key={step.key} className="relative">
+            <button
+              onClick={() => onChange(groupId, step.key)}
+              onMouseEnter={() => setHoveredIndex(idx)}
+              onMouseLeave={() => setHoveredIndex(null)}
+              className={`w-3 h-3 rounded-full transition-all duration-200 ${
+                isFilled 
+                  ? 'bg-sunny-yellow' 
+                  : isHovered 
+                    ? 'bg-sunny-yellow/50' 
+                    : 'bg-white/20'
+              } ${isHovered ? 'scale-125' : ''}`}
+            />
+            {showLabel && (
+              <div className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-black rounded text-xs whitespace-nowrap z-10">
+                {step.label}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================
+// SPEC CARD COMPONENT
+// ============================================
+function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded }) {
+  const daysUntil = spec.earliestDue ? getDaysUntil(spec.earliestDue) : null;
+  
+  // Urgency styling
+  let urgencyClass = '';
+  let urgencyGlow = '';
+  if (daysUntil !== null) {
+    if (daysUntil < 0) {
+      urgencyClass = 'border-red-500/50';
+      urgencyGlow = 'shadow-red-500/20 shadow-lg';
+    } else if (daysUntil <= 3) {
+      urgencyClass = 'border-red-500/30';
+      urgencyGlow = 'shadow-red-500/10 shadow-md';
+    } else if (daysUntil <= 7) {
+      urgencyClass = 'border-amber-500/30';
+      urgencyGlow = 'shadow-amber-500/10 shadow-md';
+    }
+  }
+  
+  return (
+    <div 
+      className={`bg-white/5 rounded-2xl border border-white/10 overflow-hidden transition-all hover:bg-white/[0.07] ${urgencyClass} ${urgencyGlow}`}
+    >
+      {/* Card Header */}
+      <div 
+        className="p-4 cursor-pointer"
+        onClick={() => onExpand(spec.id)}
+      >
+        <div className="flex items-start gap-4">
+          {/* Visual Dimension Preview */}
+          <DimensionPreview dimensions={spec.label} channel={channel} />
+          
+          {/* Info */}
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-white">{spec.label}</div>
+            <div className="text-sm text-white/50 mt-0.5">
+              {spec.publisher && <span>{spec.publisher} • </span>}
+              {spec.placements.length} placement{spec.placements.length !== 1 ? 's' : ''}
+            </div>
+            
+            {/* Flight dates */}
+            {spec.minStart && spec.maxEnd && (
+              <div className="text-xs text-white/40 mt-1">
+                {formatDate(spec.minStart)} → {formatDate(spec.maxEnd)}
+              </div>
+            )}
+          </div>
+          
+          {/* Right side - Due date & expand */}
+          <div className="text-right flex-shrink-0">
+            {spec.earliestDue && (
+              <div className={`text-sm font-medium ${
+                daysUntil !== null && daysUntil < 0 ? 'text-red-400' :
+                daysUntil !== null && daysUntil <= 3 ? 'text-red-400' :
+                daysUntil !== null && daysUntil <= 7 ? 'text-amber-400' :
+                'text-white/70'
+              }`}>
+                {daysUntil !== null && daysUntil < 0 
+                  ? 'Overdue' 
+                  : daysUntil === 0 
+                    ? 'Due today'
+                    : `${daysUntil}d left`}
+              </div>
+            )}
+            <div className="text-xs text-white/40 mt-0.5">
+              {spec.earliestDue ? formatDate(spec.earliestDue) : 'No due date'}
+            </div>
+          </div>
+        </div>
+        
+        {/* Status Track */}
+        <div className="flex items-center justify-between mt-4 pt-3 border-t border-white/5">
+          <StatusTrack 
+            currentStatus={spec.status || 'briefed'} 
+            onChange={onStatusChange}
+            groupId={spec.id}
+          />
+          
+          <span className={`text-white/30 text-sm transition-transform ${isExpanded ? 'rotate-90' : ''}`}>
+            ▶
+          </span>
+        </div>
+      </div>
+      
+      {/* Expanded Content */}
+      {isExpanded && (
+        <div className="border-t border-white/10">
+          {/* Upload Area */}
+          <div className="p-4 bg-black/20">
+            <div className="border-2 border-dashed border-white/20 rounded-xl p-5 text-center hover:border-sunny-yellow/50 hover:bg-sunny-yellow/5 transition-all cursor-pointer group">
+              <div className="text-xl mb-1 group-hover:scale-110 transition-transform">📁</div>
+              <div className="text-sm text-white/70">Upload creative</div>
+              <div className="text-xs text-white/40 mt-1">for all {spec.placements.length} placements</div>
+            </div>
+          </div>
+          
+          {/* Placements List */}
+          <div className="max-h-64 overflow-y-auto">
+            {spec.placements.map((p, idx) => (
+              <div 
+                key={p.id || idx} 
+                className="px-4 py-2.5 flex items-center gap-3 border-t border-white/5 hover:bg-white/5"
+              >
+                <div className="w-5 h-5 rounded bg-white/10 flex items-center justify-center text-xs text-white/40 flex-shrink-0">
+                  {idx + 1}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm truncate">{p.placementName}</div>
+                  <div className="text-xs text-white/40 truncate">
+                    {[p.location, p.flightStart && `${formatDate(p.flightStart)} → ${formatDate(p.flightEnd)}`]
+                      .filter(Boolean).join(' • ')}
+                  </div>
+                </div>
+                <button className="text-xs text-white/40 hover:text-sunny-yellow px-2 py-1 rounded hover:bg-white/10 flex-shrink-0">
+                  Upload
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+function formatDate(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    return new Date(dateStr).toLocaleDateString('en-AU', { 
+      day: 'numeric', 
+      month: 'short'
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
+function getDaysUntil(dateStr) {
+  if (!dateStr) return null;
+  const days = Math.ceil((new Date(dateStr) - new Date()) / (1000 * 60 * 60 * 24));
+  return days;
+}
+
+// ============================================
+// MAIN PAGE COMPONENT
+// ============================================
 export default function BriefPage() {
   const params = useParams();
   const router = useRouter();
   const [brief, setBrief] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [expandedGroups, setExpandedGroups] = useState(new Set());
+  const [expandedSpecs, setExpandedSpecs] = useState(new Set());
   const [copySuccess, setCopySuccess] = useState(false);
 
-  const briefId = params.briefId || briefId;
+  const briefId = params.briefId || params.id;
 
   useEffect(() => {
     async function loadBrief() {
@@ -37,11 +324,6 @@ export default function BriefPage() {
         if (!res.ok) throw new Error('Brief not found');
         const data = await res.json();
         setBrief(data);
-        
-        // Expand first group by default
-        if (data.groups && data.groups.length > 0) {
-          setExpandedGroups(new Set([data.groups[0].id]));
-        }
       } catch (err) {
         console.error('Failed to load brief:', err);
       }
@@ -50,165 +332,141 @@ export default function BriefPage() {
     loadBrief();
   }, [briefId]);
 
-  // Group items if not already grouped
-  const groups = useMemo(() => {
-    if (!brief) return [];
-    
-    // If brief has groups, use those
-    if (brief.groups && brief.groups.length > 0) {
-      return brief.groups;
+  // Build lookup of stored group statuses
+  const storedStatuses = useMemo(() => {
+    const lookup = {};
+    if (brief?.groups) {
+      brief.groups.forEach(channelGroup => {
+        channelGroup.specs?.forEach(spec => {
+          if (spec.id) lookup[spec.id] = spec.status || 'briefed';
+        });
+      });
     }
+    return lookup;
+  }, [brief?.groups]);
+
+  // Organize data: Channel → Specs → Placements
+  const channelData = useMemo(() => {
+    if (!brief?.items) return {};
     
-    // Otherwise, group items by specs
-    const grouped = {};
-    (brief.items || []).forEach(item => {
-      const groupId = item.creativeGroupId || `${item.channel}-${item.specs?.dimensions || 'default'}`;
-      if (!grouped[groupId]) {
-        grouped[groupId] = {
-          id: groupId,
-          name: item.creativeGroupName || item.specs?.dimensions || 'Group',
-          channel: item.channel,
-          channelName: item.channelName,
+    const channels = {};
+    
+    brief.items.forEach(item => {
+      const channel = item.channel || 'ooh';
+      
+      // Determine spec key based on channel
+      let specKey, specLabel;
+      if (channel === 'radio' || channel === 'tv') {
+        specKey = item.specs?.adLength || item.specs?.spotLength || 'unknown';
+        specLabel = specKey.includes('second') ? specKey : `${specKey} seconds`;
+      } else {
+        specKey = item.specs?.dimensions || 'unknown';
+        specLabel = specKey;
+      }
+      
+      const specId = `${channel}-${specKey}`;
+      
+      if (!channels[channel]) {
+        channels[channel] = { specs: {}, totalPlacements: 0, totalCreatives: 0 };
+      }
+      
+      if (!channels[channel].specs[specKey]) {
+        channels[channel].specs[specKey] = {
+          id: specId,
+          key: specKey,
+          label: specLabel,
+          publisher: item.publisherName,
           placements: [],
-          earliestDue: null,
           minStart: null,
           maxEnd: null,
-          status: 'briefed',
+          earliestDue: null,
+          status: storedStatuses[specId] || 'briefed', // Read from stored groups
         };
+        channels[channel].totalCreatives++;
       }
-      grouped[groupId].placements.push(item);
       
-      // Update dates
-      if (item.dueDate && (!grouped[groupId].earliestDue || item.dueDate < grouped[groupId].earliestDue)) {
-        grouped[groupId].earliestDue = item.dueDate;
+      const spec = channels[channel].specs[specKey];
+      spec.placements.push(item);
+      channels[channel].totalPlacements++;
+      
+      // Track dates
+      if (item.flightStart) {
+        if (!spec.minStart || item.flightStart < spec.minStart) spec.minStart = item.flightStart;
       }
-      if (item.flightStart && (!grouped[groupId].minStart || item.flightStart < grouped[groupId].minStart)) {
-        grouped[groupId].minStart = item.flightStart;
+      if (item.flightEnd) {
+        if (!spec.maxEnd || item.flightEnd > spec.maxEnd) spec.maxEnd = item.flightEnd;
       }
-      if (item.flightEnd && (!grouped[groupId].maxEnd || item.flightEnd > grouped[groupId].maxEnd)) {
-        grouped[groupId].maxEnd = item.flightEnd;
+      if (item.dueDate) {
+        if (!spec.earliestDue || item.dueDate < spec.earliestDue) spec.earliestDue = item.dueDate;
       }
     });
     
-    return Object.values(grouped);
-  }, [brief]);
+    return channels;
+  }, [brief, storedStatuses]);
 
-  // Timeline calculations
-  const timelineData = useMemo(() => {
-    if (groups.length === 0) return null;
+  // Stats
+  const stats = useMemo(() => {
+    let totalCreatives = 0;
+    let totalPlacements = 0;
+    let completed = 0;
+    let dueSoon = 0;
     
-    let minDate = null;
-    let maxDate = null;
-    
-    groups.forEach(group => {
-      const start = group.minStart || (group.placements?.[0]?.flightStart);
-      const end = group.maxEnd || (group.placements?.[0]?.flightEnd);
+    Object.values(channelData).forEach(channel => {
+      totalCreatives += channel.totalCreatives;
+      totalPlacements += channel.totalPlacements;
       
-      if (start && (!minDate || start < minDate)) minDate = start;
-      if (end && (!maxDate || end > maxDate)) maxDate = end;
-    });
-    
-    if (!minDate || !maxDate) return null;
-    
-    const start = new Date(minDate);
-    start.setDate(start.getDate() - 7);
-    const end = new Date(maxDate);
-    end.setDate(end.getDate() + 7);
-    
-    const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
-    
-    // Generate month markers
-    const months = [];
-    const current = new Date(start);
-    current.setDate(1);
-    while (current <= end) {
-      const monthStart = new Date(current);
-      const daysFromStart = Math.ceil((monthStart - start) / (1000 * 60 * 60 * 24));
-      const position = Math.max(0, (daysFromStart / totalDays) * 100);
-      
-      months.push({
-        label: monthStart.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }),
-        position,
+      Object.values(channel.specs).forEach(spec => {
+        if (spec.status === 'approved' || spec.status === 'delivered') completed++;
+        const days = getDaysUntil(spec.earliestDue);
+        if (days !== null && days >= 0 && days <= 7) dueSoon++;
       });
-      
-      current.setMonth(current.getMonth() + 1);
-    }
-    
-    // Calculate bar positions
-    const bars = groups.map(group => {
-      const groupStart = new Date(group.minStart || minDate);
-      const groupEnd = new Date(group.maxEnd || maxDate);
-      
-      const startDays = Math.ceil((groupStart - start) / (1000 * 60 * 60 * 24));
-      const endDays = Math.ceil((groupEnd - start) / (1000 * 60 * 60 * 24));
-      
-      const left = (startDays / totalDays) * 100;
-      const width = ((endDays - startDays) / totalDays) * 100;
-      
-      return {
-        ...group,
-        left: Math.max(0, left),
-        width: Math.max(3, width),
-      };
     });
     
-    return { start, end, totalDays, months, bars };
-  }, [groups]);
+    return { totalCreatives, totalPlacements, completed, dueSoon };
+  }, [channelData]);
 
-  function toggleGroupExpanded(groupId) {
-    setExpandedGroups(prev => {
+  function toggleSpecExpanded(specId) {
+    setExpandedSpecs(prev => {
       const next = new Set(prev);
-      if (next.has(groupId)) {
-        next.delete(groupId);
-      } else {
-        next.add(groupId);
-      }
+      if (next.has(specId)) next.delete(specId);
+      else next.add(specId);
       return next;
     });
   }
 
-  async function updateGroupStatus(groupId, newStatus) {
-    // Optimistic update
-    setBrief(prev => ({
-      ...prev,
-      groups: prev.groups?.map(g => 
-        g.id === groupId ? { ...g, status: newStatus } : g
-      ),
-    }));
+  async function handleStatusChange(specId, newStatus) {
+    // Optimistic update - update the brief.groups so storedStatuses recalculates
+    setBrief(prev => {
+      if (!prev) return prev;
+      
+      const newGroups = prev.groups?.map(channelGroup => ({
+        ...channelGroup,
+        specs: channelGroup.specs?.map(spec => 
+          spec.id === specId ? { ...spec, status: newStatus } : spec
+        ) || []
+      })) || [];
+      
+      return { ...prev, groups: newGroups };
+    });
     
-    // TODO: Save to API
+    // API call
     try {
       await fetch(`/api/brief/${briefId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          groupId,
-          status: newStatus,
-        }),
+        body: JSON.stringify({ groupId: specId, status: newStatus }),
       });
     } catch (err) {
       console.error('Failed to update status:', err);
+      // Could revert optimistic update here if needed
     }
   }
 
   function copyClientLink() {
-    const clientUrl = `${window.location.origin}/brief/${briefId}/client`;
-    navigator.clipboard.writeText(clientUrl);
+    const url = `${window.location.origin}/brief/${briefId}/client`;
+    navigator.clipboard.writeText(url);
     setCopySuccess(true);
     setTimeout(() => setCopySuccess(false), 2000);
-  }
-
-  function getDueDateStatus(dueDate) {
-    if (!dueDate) return null;
-    
-    const today = new Date();
-    const due = new Date(dueDate);
-    const daysUntil = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
-    
-    if (daysUntil < 0) return { label: 'Overdue', class: 'text-red-400 bg-red-400/20' };
-    if (daysUntil <= 3) return { label: `${daysUntil}d left`, class: 'text-amber-400 bg-amber-400/20' };
-    if (daysUntil <= 7) return { label: `${daysUntil}d left`, class: 'text-yellow-400 bg-yellow-400/20' };
-    return { label: `${daysUntil}d left`, class: 'text-green-400 bg-green-400/20' };
   }
 
   if (loading) {
@@ -224,10 +482,7 @@ export default function BriefPage() {
       <div className="min-h-screen bg-sunny-dark flex items-center justify-center">
         <div className="text-center">
           <h1 className="text-2xl font-semibold mb-4">Brief not found</h1>
-          <button
-            onClick={() => router.push('/')}
-            className="text-sunny-yellow hover:underline"
-          >
+          <button onClick={() => router.push('/')} className="text-sunny-yellow hover:underline">
             ← Back to home
           </button>
         </div>
@@ -236,309 +491,110 @@ export default function BriefPage() {
   }
 
   return (
-    <div className="min-h-screen bg-sunny-dark">
+    <div className="min-h-screen bg-sunny-dark text-white">
       {/* Header */}
-      <header className="border-b border-gray-800 bg-sunny-gray sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 py-4">
+      <header className="border-b border-white/10 sticky top-0 z-50 bg-sunny-dark/95 backdrop-blur">
+        <div className="max-w-6xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <button 
-                onClick={() => router.push('/')}
-                className="text-gray-400 hover:text-white transition-colors"
-              >
-                ← Back
+              <button onClick={() => router.push('/')} className="text-white/50 hover:text-white">
+                ←
               </button>
               <div>
                 <h1 className="text-xl font-semibold">{brief.clientName}</h1>
-                <p className="text-sm text-gray-400">{brief.campaignName}</p>
+                <p className="text-sm text-white/50">{brief.campaignName}</p>
               </div>
             </div>
             
             <div className="flex items-center gap-3">
               <button
                 onClick={copyClientLink}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                   copySuccess 
-                    ? 'bg-green-600 text-white' 
-                    : 'bg-sunny-dark border border-gray-600 hover:border-gray-500'
+                    ? 'bg-green-500 text-white' 
+                    : 'bg-white/5 border border-white/10 hover:bg-white/10'
                 }`}
               >
-                {copySuccess ? '✓ Copied!' : '🔗 Copy Client Link'}
+                {copySuccess ? '✓ Copied!' : '🔗 Client Link'}
               </button>
               <button
                 onClick={() => router.push(`/brief/${briefId}/client`)}
-                className="px-4 py-2 bg-sunny-yellow text-black rounded-lg text-sm font-semibold hover:bg-yellow-400 transition-colors"
+                className="px-4 py-2 bg-sunny-yellow text-black rounded-lg text-sm font-semibold hover:bg-yellow-300"
               >
-                View as Client →
+                Preview →
               </button>
             </div>
           </div>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        {/* Summary Stats */}
-        <div className="grid grid-cols-4 gap-4 mb-8">
-          <div className="bg-sunny-gray border border-gray-700 rounded-xl p-4">
-            <div className="text-3xl font-bold text-sunny-yellow">{groups.length}</div>
-            <div className="text-sm text-gray-400">Unique Creatives</div>
+      <div className="max-w-6xl mx-auto px-6 py-8">
+        {/* Stats */}
+        <div className="grid grid-cols-4 gap-4 mb-10">
+          <div className="bg-gradient-to-br from-sunny-yellow/20 to-sunny-yellow/5 border border-sunny-yellow/20 rounded-2xl p-5">
+            <div className="text-4xl font-bold text-sunny-yellow">{stats.totalCreatives}</div>
+            <div className="text-sm text-white/60 mt-1">Unique Creatives</div>
           </div>
-          <div className="bg-sunny-gray border border-gray-700 rounded-xl p-4">
-            <div className="text-3xl font-bold">{brief.items?.length || 0}</div>
-            <div className="text-sm text-gray-400">Total Placements</div>
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+            <div className="text-4xl font-bold">{stats.totalPlacements}</div>
+            <div className="text-sm text-white/60 mt-1">Total Placements</div>
           </div>
-          <div className="bg-sunny-gray border border-gray-700 rounded-xl p-4">
-            <div className="text-3xl font-bold text-green-400">
-              {groups.filter(g => g.status === 'approved' || g.status === 'delivered').length}
-            </div>
-            <div className="text-sm text-gray-400">Completed</div>
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+            <div className="text-4xl font-bold text-green-400">{stats.completed}</div>
+            <div className="text-sm text-white/60 mt-1">Completed</div>
           </div>
-          <div className="bg-sunny-gray border border-gray-700 rounded-xl p-4">
-            <div className="text-3xl font-bold text-amber-400">
-              {groups.filter(g => {
-                const status = getDueDateStatus(g.earliestDue);
-                return status && (status.label === 'Overdue' || status.label.includes('3d') || status.label.includes('2d') || status.label.includes('1d'));
-              }).length}
-            </div>
-            <div className="text-sm text-gray-400">Due Soon</div>
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+            <div className="text-4xl font-bold text-amber-400">{stats.dueSoon}</div>
+            <div className="text-sm text-white/60 mt-1">Due Soon</div>
           </div>
         </div>
 
-        {/* Timeline */}
-        {timelineData && (
-          <div className="bg-sunny-gray border border-gray-700 rounded-xl p-6 mb-8">
-            <h2 className="text-lg font-semibold mb-4">Flight Plan</h2>
-            
-            {/* Month labels */}
-            <div className="relative h-6 mb-2 ml-48">
-              {timelineData.months.map((month, i) => (
-                <div
-                  key={i}
-                  className="absolute text-xs text-gray-500 transform -translate-x-1/2"
-                  style={{ left: `${month.position}%` }}
-                >
-                  {month.label}
-                </div>
-              ))}
-            </div>
-            
-            {/* Timeline bars */}
-            <div className="space-y-2">
-              {timelineData.bars.map((bar) => {
-                const colors = CHANNEL_COLORS[bar.channel] || CHANNEL_COLORS.ooh;
-                const statusConfig = STATUS_CONFIG[bar.status || 'briefed'];
-                
-                return (
-                  <div key={bar.id} className="flex items-center gap-4">
-                    {/* Label */}
-                    <div className="w-44 flex-shrink-0">
-                      <div className="text-sm font-medium truncate">{bar.name}</div>
-                      <div className="text-xs text-gray-500">
-                        {bar.placements?.length || 0} placements
-                      </div>
-                    </div>
-                    
-                    {/* Track */}
-                    <div className="flex-1 relative h-10">
-                      <div className="absolute inset-0 bg-gray-800 rounded" />
-                      
-                      {/* Bar */}
-                      <div
-                        className={`absolute h-full rounded cursor-pointer transition-all hover:brightness-110 ${colors.bg}`}
-                        style={{ left: `${bar.left}%`, width: `${bar.width}%` }}
-                        onClick={() => toggleGroupExpanded(bar.id)}
-                      >
-                        <div className="px-2 py-1 text-xs text-white flex items-center justify-between h-full">
-                          <span className="truncate">{bar.name}</span>
-                          <span className="ml-1">{statusConfig.icon}</span>
-                        </div>
-                      </div>
-                      
-                      {/* Due date marker */}
-                      {bar.earliestDue && (
-                        <div
-                          className="absolute top-0 bottom-0 w-0.5 bg-red-500"
-                          style={{
-                            left: `${((new Date(bar.earliestDue) - timelineData.start) / (1000 * 60 * 60 * 24) / timelineData.totalDays) * 100}%`
-                          }}
-                          title={`Due: ${bar.earliestDue}`}
-                        />
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            
-            {/* Legend */}
-            <div className="flex items-center gap-6 mt-4 pt-4 border-t border-gray-700">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded bg-blue-500" />
-                <span className="text-xs text-gray-400">OOH</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded bg-purple-500" />
-                <span className="text-xs text-gray-400">TV</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded bg-amber-500" />
-                <span className="text-xs text-gray-400">Radio</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded bg-green-500" />
-                <span className="text-xs text-gray-400">Digital</span>
-              </div>
-              <div className="ml-auto flex items-center gap-2">
-                <div className="w-0.5 h-4 bg-red-500" />
-                <span className="text-xs text-gray-400">Due date</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Creative Groups */}
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold">Creative Requirements</h2>
-          
-          {groups.map((group) => {
-            const colors = CHANNEL_COLORS[group.channel] || CHANNEL_COLORS.ooh;
-            const isExpanded = expandedGroups.has(group.id);
-            const statusConfig = STATUS_CONFIG[group.status || 'briefed'];
-            const dueStatus = getDueDateStatus(group.earliestDue);
+        {/* Creative Requirements by Channel */}
+        <div className="space-y-10">
+          {Object.entries(channelData).map(([channelKey, channel]) => {
+            const config = CHANNELS[channelKey] || CHANNELS.ooh;
+            const specs = Object.values(channel.specs);
             
             return (
-              <div
-                key={group.id}
-                className={`rounded-xl border ${colors.border} overflow-hidden`}
-              >
-                {/* Group Header */}
-                <div
-                  className={`p-4 ${colors.light} cursor-pointer`}
-                  onClick={() => toggleGroupExpanded(group.id)}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className={`w-10 h-10 rounded-lg ${colors.bg} flex items-center justify-center text-white font-bold`}>
-                        {group.placements?.length || 0}
-                      </div>
-                      
-                      <div>
-                        <div className="font-semibold text-lg">{group.name}</div>
-                        <div className="text-sm text-gray-400">
-                          {group.channelName} • {group.placements?.length || 0} placement{(group.placements?.length || 0) !== 1 ? 's' : ''}
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center gap-4">
-                      {dueStatus && (
-                        <span className={`text-xs px-2 py-1 rounded ${dueStatus.class}`}>
-                          {dueStatus.label}
-                        </span>
-                      )}
-                      
-                      {group.earliestDue && (
-                        <div className="text-sm text-right">
-                          <div className="text-gray-500">Due</div>
-                          <div className="font-medium">{group.earliestDue}</div>
-                        </div>
-                      )}
-                      
-                      {/* Status dropdown */}
-                      <select
-                        value={group.status || 'briefed'}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          updateGroupStatus(group.id, e.target.value);
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        className={`px-3 py-1 rounded-lg text-sm font-medium ${statusConfig.color} text-white border-0 cursor-pointer`}
-                      >
-                        {Object.entries(STATUS_CONFIG).map(([key, config]) => (
-                          <option key={key} value={key}>{config.icon} {config.label}</option>
-                        ))}
-                      </select>
-                      
-                      <span className="text-gray-400 ml-2">{isExpanded ? '▼' : '▶'}</span>
-                    </div>
+              <div key={channelKey}>
+                {/* Channel Header */}
+                <div className="flex items-center gap-3 mb-5">
+                  <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${config.gradient} flex items-center justify-center text-xl shadow-lg`}>
+                    {config.icon}
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold">{config.name}</h2>
+                    <p className="text-sm text-white/50">
+                      {channel.totalCreatives} creative{channel.totalCreatives !== 1 ? 's' : ''} • {channel.totalPlacements} placement{channel.totalPlacements !== 1 ? 's' : ''}
+                    </p>
                   </div>
                 </div>
                 
-                {/* Expanded Content */}
-                {isExpanded && (
-                  <div className="border-t border-gray-700">
-                    {/* Specs summary */}
-                    <div className="p-4 bg-sunny-dark/50 grid grid-cols-3 gap-4">
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">Specs</div>
-                        <div className="font-medium">{group.name}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">Flight</div>
-                        <div className="font-medium">
-                          {group.minStart || '—'} → {group.maxEnd || '—'}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">Publisher</div>
-                        <div className="font-medium">
-                          {group.placements?.[0]?.publisherName || '—'}
-                        </div>
-                      </div>
-                    </div>
-                    
-                    {/* Upload section */}
-                    <div className="p-4 border-t border-gray-700 bg-sunny-dark/30">
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="font-medium">Creative Upload</h4>
-                        <span className="text-xs text-gray-500">Upload one file for all {group.placements?.length} placements</span>
-                      </div>
-                      
-                      <div className="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center hover:border-sunny-yellow transition-colors cursor-pointer">
-                        <div className="text-2xl mb-2">📁</div>
-                        <div className="text-sm font-medium">Drop file here or click to upload</div>
-                        <div className="text-xs text-gray-500 mt-1">or upload individually below</div>
-                      </div>
-                    </div>
-                    
-                    {/* Placements list */}
-                    <div className="divide-y divide-gray-700">
-                      {(group.placements || []).map((item, idx) => (
-                        <div key={item.id || idx} className="p-4 flex items-center gap-4 hover:bg-sunny-dark/30">
-                          <div className="w-8 h-8 rounded bg-gray-700 flex items-center justify-center text-xs text-gray-400">
-                            {idx + 1}
-                          </div>
-                          
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium truncate">{item.placementName}</div>
-                            <div className="text-sm text-gray-500">
-                              {item.location || item.stateName}
-                              {item.flightStart && ` • ${item.flightStart} → ${item.flightEnd}`}
-                            </div>
-                          </div>
-                          
-                          {item.restrictions && item.restrictions.length > 0 && (
-                            <div className="text-xs text-amber-400 px-2 py-1 bg-amber-400/20 rounded">
-                              ⚠️ Restrictions
-                            </div>
-                          )}
-                          
-                          <div className="text-sm text-gray-400">
-                            Due: {item.dueDate || '—'}
-                          </div>
-                          
-                          <button className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-gray-700">
-                            Upload ↗
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                {/* Spec Cards Grid */}
+                <div className="grid grid-cols-2 gap-4">
+                  {specs.map(spec => (
+                    <SpecCard
+                      key={spec.id}
+                      spec={spec}
+                      channel={channelKey}
+                      onStatusChange={handleStatusChange}
+                      onExpand={toggleSpecExpanded}
+                      isExpanded={expandedSpecs.has(spec.id)}
+                    />
+                  ))}
+                </div>
               </div>
             );
           })}
         </div>
+
+        {/* Empty State */}
+        {Object.keys(channelData).length === 0 && (
+          <div className="text-center py-20">
+            <div className="text-5xl mb-4">📋</div>
+            <p className="text-white/50 text-lg">No placements in this brief yet.</p>
+          </div>
+        )}
       </div>
     </div>
   );
