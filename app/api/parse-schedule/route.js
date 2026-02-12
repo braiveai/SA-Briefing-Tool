@@ -23,14 +23,15 @@ export async function POST(request) {
 
     const formData = await request.formData();
     const file = formData.get('file');
-    const channel = formData.get('channel') || 'ooh';
-    const publisher = formData.get('publisher') || 'Unknown';
+    // Channel/publisher are optional - AI will detect if not provided
+    const providedChannel = formData.get('channel') || null;
+    const providedPublisher = formData.get('publisher') || null;
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided', debug: debugInfo }, { status: 400 });
     }
 
-    debugInfo.steps.push(`File received: ${file.name}, channel: ${channel}, publisher: ${publisher}`);
+    debugInfo.steps.push(`File received: ${file.name}`);
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const fileName = file.name.toLowerCase();
@@ -40,14 +41,14 @@ export async function POST(request) {
     if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
       const content = extractFromExcel(buffer);
       debugInfo.steps.push(`Excel extracted: ${content.length} chars`);
-      result = await parseWithAI(openai, content, channel, debugInfo);
+      result = await parseWithAI(openai, content, providedChannel, debugInfo);
     } else if (fileName.endsWith('.csv')) {
       const content = buffer.toString('utf-8');
       debugInfo.steps.push(`CSV extracted: ${content.length} chars`);
-      result = await parseWithAI(openai, content, channel, debugInfo);
+      result = await parseWithAI(openai, content, providedChannel, debugInfo);
     } else if (fileName.endsWith('.pdf')) {
       debugInfo.steps.push('Processing PDF with vision...');
-      result = await parsePDFWithVision(openai, buffer, channel, debugInfo);
+      result = await parsePDFWithVision(openai, buffer, providedChannel, debugInfo);
     } else {
       return NextResponse.json({
         error: 'Unsupported file type. Please upload Excel, CSV, or PDF.',
@@ -55,17 +56,23 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
+    // Use provided values or AI-detected values
+    const detectedChannel = providedChannel || result.detectedChannel || 'ooh';
+    const detectedPublisher = providedPublisher || result.detectedPublisher || '';
+
+    // Apply channel to all placements
     const placements = result.placements.map(p => ({
       ...p,
-      channel: channel,
-      publisher: publisher,
+      channel: detectedChannel,
     }));
 
-    debugInfo.steps.push(`Parsed ${placements.length} placements`);
+    debugInfo.steps.push(`Parsed ${placements.length} placements, detected: ${detectedChannel}/${detectedPublisher}`);
 
     return NextResponse.json({
       success: true,
-      mediaType: channel,
+      mediaType: detectedChannel,
+      detectedChannel: detectedChannel,
+      detectedPublisher: detectedPublisher,
       placements: placements,
       debug: debugInfo
     });
@@ -109,9 +116,9 @@ function extractFromExcel(buffer) {
   }
 }
 
-async function parsePDFWithVision(openai, buffer, channel, debugInfo) {
+async function parsePDFWithVision(openai, buffer, providedChannel, debugInfo) {
   const base64PDF = buffer.toString('base64');
-  const systemPrompt = getSystemPrompt(channel);
+  const systemPrompt = getSystemPrompt(providedChannel);
 
   debugInfo.steps.push('Calling OpenAI vision...');
 
@@ -171,12 +178,20 @@ async function parsePDFWithVision(openai, buffer, channel, debugInfo) {
     throw new Error('No placements found in PDF.');
   }
 
+  // Detect channel and publisher from the data
+  const detected = detectChannelAndPublisher(placements, parsed);
+  const channel = providedChannel || detected.channel;
+  
   const normalized = placements.map((p, i) => normalizePlacement(p, channel, i));
-  return { placements: normalized };
+  return { 
+    placements: normalized,
+    detectedChannel: detected.channel,
+    detectedPublisher: detected.publisher,
+  };
 }
 
-async function parseWithAI(openai, content, channel, debugInfo) {
-  const systemPrompt = getSystemPrompt(channel);
+async function parseWithAI(openai, content, providedChannel, debugInfo) {
+  const systemPrompt = getSystemPrompt(providedChannel);
 
   let textContent = content;
   if (content.length > 25000) {
@@ -230,20 +245,97 @@ async function parseWithAI(openai, content, channel, debugInfo) {
     throw new Error('No placements found in file.');
   }
 
+  // Detect channel and publisher from the data
+  const detected = detectChannelAndPublisher(placements, parsed);
+  const channel = providedChannel || detected.channel;
+
   const normalized = placements.map((p, i) => normalizePlacement(p, channel, i));
-  return { placements: normalized };
+  return { 
+    placements: normalized,
+    detectedChannel: detected.channel,
+    detectedPublisher: detected.publisher,
+  };
 }
 
-function getSystemPrompt(channel) {
-  const basePrompt = `You extract placement data from media schedules. Return JSON: {"placements": [...]}
+function detectChannelAndPublisher(placements, parsed) {
+  // Check if AI returned these at the top level
+  let channel = parsed.mediaType || parsed.channel || null;
+  let publisher = parsed.publisher || parsed.mediaOwner || null;
+  
+  // If not found, try to infer from data patterns
+  if (!channel) {
+    const firstPlacement = placements[0] || {};
+    const allText = JSON.stringify(placements).toLowerCase();
+    
+    // Check for TV indicators
+    if (allText.includes('spot length') || allText.includes('program') || 
+        allText.includes('network') || allText.includes('tvc') ||
+        firstPlacement.spotLength || firstPlacement.program) {
+      channel = 'tv';
+    }
+    // Check for Radio indicators
+    else if (allText.includes('radio') || allText.includes('breakfast') || 
+             allText.includes('drive time') || allText.includes('station')) {
+      channel = 'radio';
+    }
+    // Check for Digital indicators
+    else if (allText.includes('impressions') || allText.includes('cpm') || 
+             allText.includes('click') || allText.includes('banner') ||
+             allText.includes('programmatic')) {
+      channel = 'digital';
+    }
+    // Check for OOH indicators (default)
+    else if (allText.includes('panel') || allText.includes('billboard') || 
+             allText.includes('portrait') || allText.includes('landscape') ||
+             allText.includes('street furniture') || allText.includes('pixel') ||
+             firstPlacement.dimensions || firstPlacement.panelId) {
+      channel = 'ooh';
+    }
+    else {
+      channel = 'ooh'; // Default
+    }
+  }
+  
+  // Try to detect publisher from data
+  if (!publisher) {
+    const allText = JSON.stringify(placements).toLowerCase();
+    
+    // OOH Publishers
+    if (allText.includes('lumo')) publisher = 'LUMO';
+    else if (allText.includes('jcdecaux')) publisher = 'JCDecaux';
+    else if (allText.includes('qms')) publisher = 'QMS';
+    else if (allText.includes('ooh!') || allText.includes('ooh media')) publisher = 'oOh!';
+    else if (allText.includes('bishopp')) publisher = 'Bishopp';
+    else if (allText.includes('goa ')) publisher = 'GOA';
+    // TV Networks
+    else if (allText.includes('seven') || allText.includes('channel 7')) publisher = 'Seven';
+    else if (allText.includes('nine') || allText.includes('channel 9')) publisher = 'Nine';
+    else if (allText.includes('ten') || allText.includes('channel 10')) publisher = 'Ten';
+    else if (allText.includes('foxtel')) publisher = 'Foxtel';
+    // Radio Networks
+    else if (allText.includes('arn') || allText.includes('kiis') || allText.includes('pure gold')) publisher = 'ARN';
+    else if (allText.includes('sca') || allText.includes('triple m') || allText.includes('hit ')) publisher = 'SCA';
+    else if (allText.includes('nova')) publisher = 'Nova';
+    // Digital
+    else if (allText.includes('google') || allText.includes('dv360')) publisher = 'Google';
+    else if (allText.includes('meta') || allText.includes('facebook') || allText.includes('instagram')) publisher = 'Meta';
+  }
+  
+  return { channel, publisher };
+}
+
+function getSystemPrompt(providedChannel) {
+  const basePrompt = `You extract placement data from media schedules. Return JSON: {"placements": [...], "mediaType": "ooh|tv|radio|digital", "publisher": "detected publisher name or null"}
 
 RULES:
+- Detect the media type (ooh, tv, radio, digital) from the content
+- Try to identify the publisher/media owner from the document
 - Convert all dates to YYYY-MM-DD
 - Extract EVERY row/placement
 - Omit empty fields
 - Combine any restrictions/prohibitions into one "restrictions" field`;
 
-  if (channel === 'ooh') {
+  if (providedChannel === 'ooh') {
     return `${basePrompt}
 
 This is an OUT OF HOME schedule. Extract for each placement:
@@ -259,7 +351,7 @@ This is an OUT OF HOME schedule. Extract for each placement:
 - format`;
   }
 
-  if (channel === 'tv') {
+  if (providedChannel === 'tv') {
     return `${basePrompt}
 
 This is a TV schedule. Extract for each placement:
@@ -272,7 +364,7 @@ This is a TV schedule. Extract for each placement:
 - spots (number of spots)`;
   }
 
-  if (channel === 'radio') {
+  if (providedChannel === 'radio') {
     return `${basePrompt}
 
 This is a RADIO schedule. Extract for each placement:
@@ -284,7 +376,7 @@ This is a RADIO schedule. Extract for each placement:
 - spots (number of spots)`;
   }
 
-  if (channel === 'digital') {
+  if (providedChannel === 'digital') {
     return `${basePrompt}
 
 This is a DIGITAL schedule. Extract for each placement:
@@ -296,7 +388,21 @@ This is a DIGITAL schedule. Extract for each placement:
 - startDate, endDate`;
   }
 
-  return basePrompt;
+  // No channel provided - AI should detect
+  return `${basePrompt}
+
+IMPORTANT: First detect what type of media schedule this is:
+- OOH (Out of Home): billboards, street furniture, digital screens with pixel dimensions
+- TV: programs, networks, spot lengths, TVCs
+- Radio: stations, dayparts like Breakfast/Drive, spot lengths
+- Digital: impressions, CPM, banners, programmatic
+
+Then extract the appropriate fields for that media type.
+
+For OOH extract: siteName, panelId, dimensions, location, suburb, state, startDate, endDate, restrictions, direction, format
+For TV extract: siteName, station/network, program, daypart, spotLength, startDate, endDate, spots
+For Radio extract: siteName, station, daypart, spotLength, startDate, endDate, spots
+For Digital extract: siteName, platform, format, dimensions, impressions, startDate, endDate`;
 }
 
 function normalizePlacement(p, channel, index) {
