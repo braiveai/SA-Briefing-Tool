@@ -3,154 +3,190 @@ import OpenAI from 'openai';
 import * as XLSX from 'xlsx';
 
 export async function POST(request) {
-  const debugInfo = { steps: [] };
+  const debug = { steps: [] };
 
   try {
-    debugInfo.steps.push('Starting request processing');
-
     if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json({
-        error: 'OpenAI API key not configured.',
-        debug: debugInfo
-      }, { status: 500 });
+      return NextResponse.json({ error: 'OpenAI API key not configured.' }, { status: 500 });
     }
 
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const formData = await request.formData();
     const file = formData.get('file');
-    const providedChannel = formData.get('channel') || null;
-    const providedPublisher = formData.get('publisher') || null;
 
     if (!file) {
-      return NextResponse.json({ error: 'No file provided', debug: debugInfo }, { status: 400 });
+      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
 
-    debugInfo.steps.push(`File received: ${file.name}`);
-
+    debug.steps.push(`Received: ${file.name}`);
     const buffer = Buffer.from(await file.arrayBuffer());
     const fileName = file.name.toLowerCase();
 
     let result;
 
     if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
-      const content = extractFromExcel(buffer);
-      debugInfo.steps.push(`Excel extracted: ${content.length} chars`);
-      result = await parseWithAI(openai, content, debugInfo);
+      const content = extractExcel(buffer);
+      debug.steps.push(`Excel: ${content.length} chars`);
+      result = await parseWithAI(openai, content, debug);
     } else if (fileName.endsWith('.csv')) {
       const content = buffer.toString('utf-8');
-      debugInfo.steps.push(`CSV extracted: ${content.length} chars`);
-      result = await parseWithAI(openai, content, debugInfo);
+      debug.steps.push(`CSV: ${content.length} chars`);
+      result = await parseWithAI(openai, content, debug);
     } else if (fileName.endsWith('.pdf')) {
-      debugInfo.steps.push('Processing PDF with vision...');
-      result = await parsePDFWithVision(openai, buffer, debugInfo);
+      debug.steps.push('PDF → Vision API');
+      result = await parsePDFWithVision(openai, buffer, debug);
     } else {
-      return NextResponse.json({
-        error: 'Unsupported file type. Please upload Excel, CSV, or PDF.',
-        debug: debugInfo
-      }, { status: 400 });
+      return NextResponse.json({ error: 'Unsupported file type. Use Excel, CSV, or PDF.' }, { status: 400 });
     }
 
-    // Use provided values if given, otherwise use AI-detected values
-    const detectedChannel = providedChannel || result.detectedChannel || 'ooh';
-    const detectedPublisher = providedPublisher || result.detectedPublisher || '';
-
-    debugInfo.steps.push(`Parsed ${result.placements.length} placements, detected: ${detectedChannel}/${detectedPublisher}`);
+    debug.steps.push(`Result: ${result.placements.length} placements, ${result.detectedChannel}/${result.detectedPublisher}`);
 
     return NextResponse.json({
       success: true,
-      detectedChannel,
-      detectedPublisher,
+      detectedChannel: result.detectedChannel,
+      detectedPublisher: result.detectedPublisher,
       placements: result.placements,
-      debug: debugInfo
+      debug
     });
 
   } catch (error) {
-    console.error('Error parsing schedule:', error);
-    debugInfo.steps.push(`Error: ${error.message}`);
-    return NextResponse.json({
-      error: error.message || 'Failed to parse schedule',
-      debug: debugInfo
-    }, { status: 500 });
+    console.error('Parse error:', error);
+    debug.steps.push(`Error: ${error.message}`);
+    return NextResponse.json({ error: error.message || 'Failed to parse schedule', debug }, { status: 500 });
   }
 }
 
-function extractFromExcel(buffer) {
+// ============================================
+// EXCEL EXTRACTION
+// ============================================
+function extractExcel(buffer) {
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-  let allText = [];
+  const lines = [];
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
     const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
     
-    allText.push(`=== Sheet: ${sheetName} ===`);
+    lines.push(`=== Sheet: ${sheetName} ===`);
     
     for (const row of data) {
-      const cells = row.map(cell => cell === null || cell === undefined ? '' : String(cell).trim());
-      const rowText = cells.filter(c => c !== '').join(' | ');
-      if (rowText.trim()) {
-        allText.push(rowText);
+      const cells = row.map(c => c == null ? '' : String(c).trim()).filter(c => c);
+      if (cells.length > 0) {
+        lines.push(cells.join(' | '));
       }
     }
   }
 
-  return allText.join('\n');
+  return lines.join('\n');
 }
 
-// Shared prompt - AI figures out everything
+// ============================================
+// AI PROMPT - Teaches AI what channels mean, AI decides
+// ============================================
 const EXTRACTION_PROMPT = `You are a media schedule parser. Extract placement data and return ONLY valid JSON.
 
-YOUR RESPONSE MUST BE PURE JSON - no markdown, no explanation, no text before or after.
-Start your response with { and end with }
-
-Return this structure:
+Return this exact structure:
 {
   "mediaType": "ooh|tv|radio|digital",
-  "publisher": "publisher/media owner name from the document",
+  "publisher": "publisher name you detect",
   "placements": [...]
 }
 
-DETECTION INSTRUCTIONS:
-1. Determine mediaType from document content:
-   - "radio" = radio stations, AM/FM, dayparts like Breakfast/Drive, spot lengths
-   - "tv" = TV channels, programs, networks, TVCs
-   - "ooh" = billboards, digital screens, panels, street furniture, pixel dimensions
-   - "digital" = online ads, impressions, CPM, programmatic
+CHANNEL DEFINITIONS (use these to determine mediaType):
 
-2. Find publisher/media owner from logos, headers, footers, or document branding
+OOH (Out of Home) - Physical advertising in public spaces:
+- Billboards, digital billboards, street furniture, transit, retail displays
+- Physical screens in malls, airports, bus stops, roadside
+- Look for: panel IDs, pixel dimensions for physical screens, site codes, locations/suburbs
+- Common publishers: JCDecaux, oOh!, QMS, Bishopp, LUMO, GOA
+- Note: "Digital Billboard" or "Large Format Digital" = OOH (physical screen), NOT digital channel
 
-3. Extract ALL line items as placements with relevant fields:
+RADIO - Audio advertising on radio stations:
+- AM/FM radio stations, spots during programs
+- Look for: station names, dayparts (Breakfast, Drive), spot durations (15s, 30s), start/end times
+- Common publishers: ARN, SCA, Nova, ACE Radio, Grant Broadcasters
 
-FOR RADIO:
-- siteName: descriptive name (e.g., "Gold FM Bendigo - Breakfast 30s")  
+TV - Television advertising:
+- Broadcast TV channels and programs
+- Look for: channel names, program names, TVCs, networks
+- Common publishers: Seven, Nine, Ten, Foxtel, SBS
+
+DIGITAL - Online/internet advertising only:
+- Social media, programmatic, display ads, search ads
+- Look for: impressions, CPM, clicks, online platforms
+- Common publishers: Google, Meta, TikTok, LinkedIn, Spotify
+- Note: Physical digital screens are OOH, not this category
+
+PLACEMENT FIELDS TO EXTRACT:
+
+For OOH:
+- siteName: panel/site name
+- panelId: unique ID
+- dimensions: "WIDTHxHEIGHT px" format
+- location, suburb, state
+- startDate, endDate: YYYY-MM-DD
+- direction: if available
+- restrictions: content restrictions
+
+For Radio:
+- siteName: "Station - Daypart Duration" (e.g., "Gold FM - Breakfast 30s")
 - station: station name
-- daypart: time segment (Breakfast, Morning, Drive, etc.)
-- spotLength: duration in seconds
-- spots: total spot count
-- startDate, endDate: YYYY-MM-DD format
+- daypart: Breakfast, Morning, Drive, etc.
+- spotLength: seconds as number
+- spots: total count
+- startDate, endDate: YYYY-MM-DD (use contract dates)
 
-FOR TV:
-- siteName, station, program, daypart, spotLength, spots, startDate, endDate
+For TV:
+- siteName: channel/program name
+- spotLength: seconds
+- startDate, endDate
 
-FOR OOH:
-- siteName, panelId, dimensions (as "WxH px"), location, suburb, state
-- startDate, endDate, direction, restrictions
+For Digital:
+- siteName: platform/placement name
+- format: ad format
+- dimensions: if applicable
+- startDate, endDate
 
-FOR DIGITAL:
-- siteName, platform, format, dimensions, impressions, startDate, endDate
+DATE FORMAT: Always YYYY-MM-DD. Convert any format you see.
 
-RULES:
-- Convert ALL dates to YYYY-MM-DD format
-- Extract EVERY placement/line item
-- Omit fields that are empty or not present
-- Use the contract/campaign dates if individual placement dates aren't specified`;
+YOUR RESPONSE: Pure JSON only. No markdown, no explanation. Start with { end with }`;
 
-async function parsePDFWithVision(openai, buffer, debugInfo) {
-  const base64PDF = buffer.toString('base64');
+// ============================================
+// PARSE WITH AI (Excel/CSV)
+// ============================================
+async function parseWithAI(openai, content, debug) {
+  let text = content;
+  if (text.length > 30000) {
+    text = text.substring(0, 30000);
+    debug.steps.push('Truncated to 30k');
+  }
 
-  debugInfo.steps.push('Calling OpenAI vision...');
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: EXTRACTION_PROMPT },
+      { role: 'user', content: `Extract placements:\n\n${text}` }
+    ],
+    response_format: { type: 'json_object' },
+    temperature: 0.1,
+    max_tokens: 16000,
+  });
+
+  debug.steps.push(`AI responded (${response.choices[0].finish_reason})`);
+
+  if (response.choices[0].finish_reason === 'length') {
+    throw new Error('Response truncated - file may be too large');
+  }
+
+  const parsed = extractJSON(response.choices[0].message.content, debug);
+  return normalize(parsed);
+}
+
+// ============================================
+// PARSE PDF WITH VISION
+// ============================================
+async function parsePDFWithVision(openai, buffer, debug) {
+  const base64 = buffer.toString('base64');
 
   const response = await openai.chat.completions.create({
     model: 'gpt-4o',
@@ -163,13 +199,10 @@ async function parsePDFWithVision(openai, buffer, debugInfo) {
             type: 'file',
             file: {
               filename: 'schedule.pdf',
-              file_data: `data:application/pdf;base64,${base64PDF}`,
+              file_data: `data:application/pdf;base64,${base64}`,
             },
           },
-          {
-            type: 'text',
-            text: 'Extract all placements. Return ONLY JSON, nothing else.',
-          },
+          { type: 'text', text: 'Extract all placements. Return ONLY valid JSON.' },
         ],
       },
     ],
@@ -177,97 +210,53 @@ async function parsePDFWithVision(openai, buffer, debugInfo) {
     temperature: 0.1,
   });
 
-  const responseText = response.choices[0].message.content;
-  debugInfo.steps.push('OpenAI vision responded');
-  
-  const parsed = extractJSON(responseText, debugInfo);
-  return normalizeResult(parsed);
+  debug.steps.push('Vision API responded');
+  const parsed = extractJSON(response.choices[0].message.content, debug);
+  return normalize(parsed);
 }
 
-async function parseWithAI(openai, content, debugInfo) {
-  let textContent = content;
-  if (content.length > 25000) {
-    textContent = content.substring(0, 25000);
-    debugInfo.steps.push('Content truncated to 25k chars');
-  }
-
-  debugInfo.steps.push('Calling OpenAI...');
-
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      { role: 'system', content: EXTRACTION_PROMPT },
-      { role: 'user', content: `Extract all placements from this schedule:\n\n${textContent}` }
-    ],
-    response_format: { type: 'json_object' },
-    temperature: 0.1,
-    max_tokens: 16000,
-  });
-
-  const responseText = response.choices[0].message.content;
-  debugInfo.steps.push(`OpenAI responded (finish: ${response.choices[0].finish_reason})`);
-
-  if (response.choices[0].finish_reason === 'length') {
-    throw new Error('Response truncated - file may be too large. Try a smaller file.');
-  }
-
-  const parsed = extractJSON(responseText, debugInfo);
-  return normalizeResult(parsed);
-}
-
-function extractJSON(responseText, debugInfo) {
-  // Clean up the response
-  let text = responseText.trim();
+// ============================================
+// JSON EXTRACTION (handles markdown, etc)
+// ============================================
+function extractJSON(text, debug) {
+  let clean = text.trim();
   
-  // Remove markdown code blocks if present
-  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (codeBlockMatch) {
-    text = codeBlockMatch[1].trim();
-  }
+  // Remove markdown code blocks
+  const codeMatch = clean.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (codeMatch) clean = codeMatch[1].trim();
   
-  // Try parsing directly
+  // Try direct parse
   try {
-    return JSON.parse(text);
+    return JSON.parse(clean);
   } catch (e) {
-    debugInfo.steps.push(`Direct parse failed: ${e.message.substring(0, 50)}`);
+    debug.steps.push('Direct parse failed, trying extraction');
   }
   
-  // Try to find JSON object in text
-  const jsonStart = text.indexOf('{');
-  const jsonEnd = text.lastIndexOf('}');
+  // Find JSON boundaries
+  const start = clean.indexOf('{');
+  const end = clean.lastIndexOf('}');
   
-  if (jsonStart !== -1 && jsonEnd > jsonStart) {
+  if (start !== -1 && end > start) {
     try {
-      return JSON.parse(text.substring(jsonStart, jsonEnd + 1));
+      return JSON.parse(clean.substring(start, end + 1));
     } catch (e) {
-      debugInfo.steps.push(`Substring parse failed: ${e.message.substring(0, 50)}`);
+      debug.steps.push('Extraction failed');
     }
   }
   
-  // Try to find JSON array
-  const arrayStart = text.indexOf('[');
-  const arrayEnd = text.lastIndexOf(']');
-  
-  if (arrayStart !== -1 && arrayEnd > arrayStart) {
-    try {
-      const arr = JSON.parse(text.substring(arrayStart, arrayEnd + 1));
-      return { placements: arr };
-    } catch (e) {
-      debugInfo.steps.push(`Array parse failed: ${e.message.substring(0, 50)}`);
-    }
-  }
-  
-  // All methods failed
-  debugInfo.rawResponse = text.substring(0, 1000);
-  throw new Error('Failed to parse AI response. Try uploading an Excel or CSV version instead.');
+  throw new Error('Could not parse AI response as JSON');
 }
 
-function normalizeResult(parsed) {
-  // Extract placements array
+// ============================================
+// NORMALIZE RESULT
+// No detection logic here - just clean up data
+// ============================================
+function normalize(parsed) {
+  // Get placements array
   let placements = parsed.placements || [];
   
   if (!Array.isArray(placements)) {
-    // Look for any array in the response
+    // Find first array in response
     for (const key of Object.keys(parsed)) {
       if (Array.isArray(parsed[key]) && parsed[key].length > 0) {
         placements = parsed[key];
@@ -277,29 +266,39 @@ function normalizeResult(parsed) {
   }
   
   if (placements.length === 0) {
-    throw new Error('No placements found in document.');
+    throw new Error('No placements found in document');
   }
   
-  // Normalize each placement
-  const normalized = placements.map((p, i) => ({
-    siteName: p.siteName || p.name || p.station || p.panelName || `Placement ${i + 1}`,
-    station: p.station || null,
-    daypart: p.daypart || p.dayPart || null,
-    spotLength: p.spotLength || p.duration || null,
-    spots: p.spots || p.spotCount || p.total || null,
-    panelId: p.panelId || null,
-    dimensions: p.dimensions || (p.pixelWidth && p.pixelHeight ? `${p.pixelWidth}x${p.pixelHeight} px` : null),
-    location: p.location || null,
-    suburb: p.suburb || null,
-    state: p.state || null,
-    direction: p.direction || null,
-    restrictions: p.restrictions || null,
-    platform: p.platform || null,
-    impressions: p.impressions || null,
-    startDate: normalizeDate(p.startDate || p.start_date || p.start),
-    endDate: normalizeDate(p.endDate || p.end_date || p.end),
-    format: p.format || null,
-  }));
+  // Normalize each placement - just field mapping and date formatting
+  const normalized = placements.map((p, i) => {
+    // Build dimensions if we have width/height
+    let dimensions = p.dimensions || null;
+    if (!dimensions && p.pixelWidth && p.pixelHeight) {
+      dimensions = `${p.pixelWidth}x${p.pixelHeight} px`;
+    }
+    if (!dimensions && p.pixel_width && p.pixel_height) {
+      dimensions = `${p.pixel_width}x${p.pixel_height} px`;
+    }
+    
+    return {
+      siteName: p.siteName || p.name || p.panelName || p.panel_name || `Placement ${i + 1}`,
+      panelId: p.panelId || p.panel_id || p.siteCode || p.site_code || null,
+      dimensions,
+      location: p.location || null,
+      suburb: p.suburb || p.suburbName || null,
+      state: p.state || p.stateName || null,
+      direction: p.direction || p.panelDirection || null,
+      restrictions: p.restrictions || null,
+      station: p.station || null,
+      daypart: p.daypart || p.dayPart || p.day_part || null,
+      spotLength: p.spotLength || p.duration || p.dur || null,
+      spots: p.spots || p.total || p.spotCount || null,
+      startDate: normalizeDate(p.startDate || p.start_date || p.bookingStartDate),
+      endDate: normalizeDate(p.endDate || p.end_date || p.bookingEndDate),
+      format: p.format || p.sizeName || null,
+      _importId: `import-${Date.now()}-${i}`,
+    };
+  });
   
   return {
     placements: normalized,
@@ -308,28 +307,41 @@ function normalizeResult(parsed) {
   };
 }
 
+// ============================================
+// DATE NORMALIZATION
+// ============================================
 function normalizeDate(dateStr) {
   if (!dateStr) return null;
   
-  const str = String(dateStr).trim();
+  const s = String(dateStr).trim();
   
   // Already YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
-    return str.substring(0, 10);
-  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
   
-  // DD/MM/YYYY or DD.MM.YYYY
-  const ddmmyyyy = str.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
-  if (ddmmyyyy) {
-    const [, d, m, y] = ddmmyyyy;
+  // DD/MM/YYYY or DD-MM-YYYY
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (dmy) {
+    const [, d, m, y] = dmy;
     return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
   }
   
-  // Try native parsing
-  const parsed = new Date(str);
-  if (!isNaN(parsed.getTime())) {
-    return parsed.toISOString().split('T')[0];
+  // DD-Mon-YYYY
+  const dMonY = s.match(/^(\d{1,2})[\/\-](\w{3})[\/\-](\d{4})/);
+  if (dMonY) {
+    const [, d, mon, y] = dMonY;
+    const months = { jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06',
+                     jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12' };
+    const m = months[mon.toLowerCase()];
+    if (m) return `${y}-${m}-${d.padStart(2, '0')}`;
   }
+  
+  // Try native Date
+  try {
+    const parsed = new Date(s);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString().split('T')[0];
+    }
+  } catch {}
   
   return null;
 }
