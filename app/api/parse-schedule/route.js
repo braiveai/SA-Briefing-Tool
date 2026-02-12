@@ -23,12 +23,14 @@ export async function POST(request) {
 
     const formData = await request.formData();
     const file = formData.get('file');
+    const channel = formData.get('channel') || 'ooh';
+    const publisher = formData.get('publisher') || 'Unknown';
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided', debug: debugInfo }, { status: 400 });
     }
 
-    debugInfo.steps.push(`File received: ${file.name}, size: ${file.size}`);
+    debugInfo.steps.push(`File received: ${file.name}, channel: ${channel}, publisher: ${publisher}`);
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const fileName = file.name.toLowerCase();
@@ -38,14 +40,14 @@ export async function POST(request) {
     if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
       const content = extractFromExcel(buffer);
       debugInfo.steps.push(`Excel extracted: ${content.length} chars`);
-      result = await parseWithAI(openai, content, debugInfo);
+      result = await parseWithAI(openai, content, channel, debugInfo);
     } else if (fileName.endsWith('.csv')) {
       const content = buffer.toString('utf-8');
       debugInfo.steps.push(`CSV extracted: ${content.length} chars`);
-      result = await parseWithAI(openai, content, debugInfo);
+      result = await parseWithAI(openai, content, channel, debugInfo);
     } else if (fileName.endsWith('.pdf')) {
       debugInfo.steps.push('Processing PDF with vision...');
-      result = await parsePDFWithVision(openai, buffer, debugInfo);
+      result = await parsePDFWithVision(openai, buffer, channel, debugInfo);
     } else {
       return NextResponse.json({
         error: 'Unsupported file type. Please upload Excel, CSV, or PDF.',
@@ -53,12 +55,18 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
-    debugInfo.steps.push(`Parsed ${result.placements.length} placements, mediaType: ${result.mediaType}`);
+    const placements = result.placements.map(p => ({
+      ...p,
+      channel: channel,
+      publisher: publisher,
+    }));
+
+    debugInfo.steps.push(`Parsed ${placements.length} placements`);
 
     return NextResponse.json({
       success: true,
-      mediaType: result.mediaType,
-      placements: result.placements,
+      mediaType: channel,
+      placements: placements,
       debug: debugInfo
     });
 
@@ -101,11 +109,9 @@ function extractFromExcel(buffer) {
   }
 }
 
-// PDF parsing using GPT-4o vision
-async function parsePDFWithVision(openai, buffer, debugInfo) {
+async function parsePDFWithVision(openai, buffer, channel, debugInfo) {
   const base64PDF = buffer.toString('base64');
-  
-  const systemPrompt = getSystemPrompt();
+  const systemPrompt = getSystemPrompt(channel);
 
   debugInfo.steps.push('Calling OpenAI vision...');
 
@@ -136,7 +142,6 @@ async function parsePDFWithVision(openai, buffer, debugInfo) {
   const responseText = response.choices[0].message.content;
   debugInfo.steps.push('OpenAI vision responded');
 
-  // Extract JSON from response (might be wrapped in markdown)
   let jsonStr = responseText;
   const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (jsonMatch) {
@@ -151,7 +156,6 @@ async function parsePDFWithVision(openai, buffer, debugInfo) {
     throw new Error('Failed to parse AI response as JSON');
   }
 
-  const mediaType = parsed.mediaType || 'ooh';
   let placements = parsed.placements || parsed || [];
   
   if (!Array.isArray(placements)) {
@@ -167,13 +171,12 @@ async function parsePDFWithVision(openai, buffer, debugInfo) {
     throw new Error('No placements found in PDF.');
   }
 
-  const normalized = placements.map((p, i) => normalizePlacement(p, mediaType, i));
-  return { mediaType, placements: normalized };
+  const normalized = placements.map((p, i) => normalizePlacement(p, channel, i));
+  return { placements: normalized };
 }
 
-// Text-based parsing for Excel/CSV
-async function parseWithAI(openai, content, debugInfo) {
-  const systemPrompt = getSystemPrompt();
+async function parseWithAI(openai, content, channel, debugInfo) {
+  const systemPrompt = getSystemPrompt(channel);
 
   let textContent = content;
   if (content.length > 25000) {
@@ -209,8 +212,6 @@ async function parseWithAI(openai, content, debugInfo) {
     throw new Error('OpenAI returned invalid JSON');
   }
 
-  const mediaType = parsed.mediaType || 'ooh';
-  
   let placements = [];
   if (Array.isArray(parsed.placements)) {
     placements = parsed.placements;
@@ -229,45 +230,76 @@ async function parseWithAI(openai, content, debugInfo) {
     throw new Error('No placements found in file.');
   }
 
-  const normalized = placements.map((p, i) => normalizePlacement(p, mediaType, i));
-  return { mediaType, placements: normalized };
+  const normalized = placements.map((p, i) => normalizePlacement(p, channel, i));
+  return { placements: normalized };
 }
 
-function getSystemPrompt() {
-  return `You analyze media schedules from various publishers.
-
-STEP 1: Identify media type:
-- "ooh" = Out of Home: billboards, screens, street furniture
-- "tv" = Television: networks, programs, spot lengths
-- "radio" = Radio: stations, dayparts
-- "print" = Print: publications, ad sizes
-- "digital" = Digital: platforms, impressions
-
-STEP 2: Extract ALL placements with relevant fields.
-
-Return JSON:
-{
-  "mediaType": "ooh|tv|radio|print|digital",
-  "placements": [...]
-}
-
-For OOH: siteName, panelId, dimensions, pixelWidth, pixelHeight, location, suburb, state, startDate, endDate, restrictions, prohibitions, direction, format
-
-For TV/Radio: siteName (use station name), station, network, program, daypart, spotLength, startDate, endDate, spots
-
-For Print: siteName (use publication name), publication, section, adSize, insertionDate
-
-For Digital: siteName (use platform name), platform, format, dimensions, impressions, startDate, endDate
+function getSystemPrompt(channel) {
+  const basePrompt = `You extract placement data from media schedules. Return JSON: {"placements": [...]}
 
 RULES:
-- Convert dates to YYYY-MM-DD
-- Extract EVERY row
-- Combine restrictions and prohibitions
+- Convert all dates to YYYY-MM-DD
+- Extract EVERY row/placement
 - Omit empty fields
-- Create dimensions as "WxH px" from pixelWidth/pixelHeight`;
+- Combine any restrictions/prohibitions into one "restrictions" field`;
+
+  if (channel === 'ooh') {
+    return `${basePrompt}
+
+This is an OUT OF HOME schedule. Extract for each placement:
+- siteName (screen/panel name)
+- panelId (if shown)
+- dimensions (pixel size as "WxH px")
+- pixelWidth, pixelHeight (numbers)
+- location (address)
+- suburb, state
+- startDate, endDate
+- restrictions
+- direction (Inbound/Outbound if shown)
+- format`;
+  }
+
+  if (channel === 'tv') {
+    return `${basePrompt}
+
+This is a TV schedule. Extract for each placement:
+- siteName (use program or network name)
+- station/network
+- program
+- daypart (e.g., Peak, Off-Peak)
+- spotLength (in seconds)
+- startDate, endDate
+- spots (number of spots)`;
+  }
+
+  if (channel === 'radio') {
+    return `${basePrompt}
+
+This is a RADIO schedule. Extract for each placement:
+- siteName (use station name)
+- station
+- daypart (e.g., Breakfast, Drive)
+- spotLength (in seconds)
+- startDate, endDate
+- spots (number of spots)`;
+  }
+
+  if (channel === 'digital') {
+    return `${basePrompt}
+
+This is a DIGITAL schedule. Extract for each placement:
+- siteName (platform or placement name)
+- platform
+- format (e.g., Display, Video, Native)
+- dimensions
+- impressions
+- startDate, endDate`;
+  }
+
+  return basePrompt;
 }
 
-function normalizePlacement(p, mediaType, index) {
+function normalizePlacement(p, channel, index) {
   let dimensions = p.dimensions || null;
   if (!dimensions && p.pixelWidth && p.pixelHeight) {
     dimensions = `${p.pixelWidth}x${p.pixelHeight} px`;
@@ -285,15 +317,14 @@ function normalizePlacement(p, mediaType, index) {
 
   const base = {
     siteName,
-    startDate: normalizeDate(p.startDate || p.start_date || p.start || p.airDate || p.insertionDate),
+    startDate: normalizeDate(p.startDate || p.start_date || p.start),
     endDate: normalizeDate(p.endDate || p.end_date || p.end),
-    channel: mediaType,
+    channel: channel,
   };
 
-  if (mediaType === 'ooh') {
+  if (channel === 'ooh') {
     return {
       ...base,
-      publisher: inferPublisher(siteName),
       panelId: p.panelId || null,
       dimensions,
       location: p.location || null,
@@ -305,7 +336,7 @@ function normalizePlacement(p, mediaType, index) {
     };
   }
 
-  if (mediaType === 'tv' || mediaType === 'radio') {
+  if (channel === 'tv' || channel === 'radio') {
     return {
       ...base,
       station: p.station || p.network || null,
@@ -313,25 +344,14 @@ function normalizePlacement(p, mediaType, index) {
       daypart: p.daypart || p.dayPart || null,
       spotLength: p.spotLength || p.duration || null,
       spots: p.spots || p.spotCount || null,
-      format: p.format || (mediaType === 'tv' ? 'TV Spot' : 'Radio Spot'),
+      format: p.format || (channel === 'tv' ? 'TV Spot' : 'Radio Spot'),
     };
   }
 
-  if (mediaType === 'print') {
+  if (channel === 'digital') {
     return {
       ...base,
-      publication: p.publication || siteName,
-      section: p.section || null,
-      adSize: p.adSize || null,
-      position: p.position || null,
-      format: p.format || 'Print Ad',
-    };
-  }
-
-  if (mediaType === 'digital') {
-    return {
-      ...base,
-      platform: p.platform || siteName,
+      platform: p.platform || null,
       dimensions,
       impressions: p.impressions || null,
       format: p.format || 'Digital Ad',
@@ -360,20 +380,6 @@ function normalizeDate(dateStr) {
   if (!isNaN(parsed.getTime())) {
     return parsed.toISOString().split('T')[0];
   }
-  
-  return null;
-}
-
-function inferPublisher(siteName) {
-  if (!siteName) return null;
-  const name = siteName.toLowerCase();
-  
-  if (name.includes('lumo')) return 'LUMO';
-  if (name.includes('qms')) return 'QMS';
-  if (name.includes('jcd') || name.includes('jcdecaux')) return 'JCDecaux';
-  if (name.includes('ooh')) return 'oOh!';
-  if (name.includes('bishopp')) return 'Bishopp';
-  if (name.includes('goa')) return 'GOA';
   
   return null;
 }
