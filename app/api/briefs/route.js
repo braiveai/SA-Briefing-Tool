@@ -34,7 +34,7 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { clientName, campaignName, items } = body;
+    const { clientName, campaignName, items, groups } = body;
 
     if (!clientName || !campaignName) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -43,11 +43,18 @@ export async function POST(request) {
     const id = generateId();
     const now = new Date().toISOString();
 
+    // If no groups provided, auto-generate from items
+    let briefGroups = groups || [];
+    if (briefGroups.length === 0 && items && items.length > 0) {
+      briefGroups = autoGroupItems(items);
+    }
+
     const brief = {
       id,
       clientName,
       campaignName,
       items: items || [],
+      groups: briefGroups,
       createdAt: now,
       updatedAt: now,
     };
@@ -73,4 +80,42 @@ function generateId() {
     id += chars[Math.floor(Math.random() * chars.length)];
   }
   return id;
+}
+
+function autoGroupItems(items) {
+  const groups = {};
+  
+  items.forEach(item => {
+    const groupId = item.creativeGroupId || `${item.channel}-${item.specs?.dimensions || 'default'}`;
+    
+    if (!groups[groupId]) {
+      groups[groupId] = {
+        id: groupId,
+        name: item.creativeGroupName || item.specs?.dimensions || 'Group',
+        channel: item.channel,
+        channelName: item.channelName,
+        specs: item.specs,
+        placements: [],
+        earliestDue: null,
+        minStart: null,
+        maxEnd: null,
+        status: 'briefed',
+      };
+    }
+    
+    groups[groupId].placements.push(item);
+    
+    // Update dates
+    if (item.dueDate && (!groups[groupId].earliestDue || item.dueDate < groups[groupId].earliestDue)) {
+      groups[groupId].earliestDue = item.dueDate;
+    }
+    if (item.flightStart && (!groups[groupId].minStart || item.flightStart < groups[groupId].minStart)) {
+      groups[groupId].minStart = item.flightStart;
+    }
+    if (item.flightEnd && (!groups[groupId].maxEnd || item.flightEnd > groups[groupId].maxEnd)) {
+      groups[groupId].maxEnd = item.flightEnd;
+    }
+  });
+  
+  return Object.values(groups);
 }
