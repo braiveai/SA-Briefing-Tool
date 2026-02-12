@@ -1,15 +1,23 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { CHANNELS, STATES, SPECS, getPublishers, getPlacements } from '@/lib/specs';
 
-// Publishers for import (can be different from specs database)
+// Publishers for import
 const IMPORT_PUBLISHERS = {
   ooh: ['LUMO', 'JCDecaux', 'QMS', 'oOh!', 'Bishopp', 'GOA', 'Other'],
   tv: ['Seven', 'Nine', 'Ten', 'SBS', 'Foxtel', 'Sky', 'Other'],
   radio: ['ARN', 'SCA', 'Nova', 'ACE Radio', 'Grant Broadcasters', 'Other'],
   digital: ['Google', 'Meta', 'TikTok', 'LinkedIn', 'Spotify', 'Other'],
+};
+
+// Channel colors for timeline
+const CHANNEL_COLORS = {
+  ooh: { bg: 'bg-blue-500', border: 'border-blue-400', light: 'bg-blue-500/20' },
+  tv: { bg: 'bg-purple-500', border: 'border-purple-400', light: 'bg-purple-500/20' },
+  radio: { bg: 'bg-amber-500', border: 'border-amber-400', light: 'bg-amber-500/20' },
+  digital: { bg: 'bg-green-500', border: 'border-green-400', light: 'bg-green-500/20' },
 };
 
 export default function NewBrief() {
@@ -21,12 +29,12 @@ export default function NewBrief() {
   const [clientName, setClientName] = useState('');
   const [campaignName, setCampaignName] = useState('');
   
-  // Selection state
+  // Manual selection state
   const [selectedChannel, setSelectedChannel] = useState(null);
   const [selectedState, setSelectedState] = useState(null);
   const [selectedPublisher, setSelectedPublisher] = useState(null);
   
-  // Cart
+  // Cart - now stores grouped data
   const [cart, setCart] = useState([]);
   
   // Schedule import state
@@ -41,6 +49,10 @@ export default function NewBrief() {
   const [importSuccess, setImportSuccess] = useState(null);
   const importFileRef = useRef(null);
   
+  // Grouping state
+  const [groupedPlacements, setGroupedPlacements] = useState([]);
+  const [expandedGroups, setExpandedGroups] = useState(new Set());
+  
   // Get available options based on selections
   const publishers = selectedChannel && selectedState 
     ? getPublishers(selectedChannel, selectedState) 
@@ -48,6 +60,258 @@ export default function NewBrief() {
   const placements = selectedChannel && selectedState && selectedPublisher
     ? getPlacements(selectedChannel, selectedState, selectedPublisher)
     : [];
+
+  // ============================================
+  // GROUPING LOGIC
+  // ============================================
+  
+  function autoGroupPlacements(placements, channel, publisher) {
+    const groups = {};
+    
+    placements.forEach((p, index) => {
+      // Determine the spec key based on channel type
+      let specKey;
+      let specLabel;
+      
+      if (channel === 'ooh') {
+        specKey = p.dimensions || 'unknown';
+        specLabel = p.dimensions || 'Unknown Size';
+      } else if (channel === 'radio' || channel === 'tv') {
+        specKey = p.spotLength ? `${p.spotLength}s` : 'unknown';
+        specLabel = p.spotLength ? `${p.spotLength} seconds` : 'Unknown Duration';
+      } else if (channel === 'digital') {
+        specKey = p.dimensions || p.format || 'unknown';
+        specLabel = p.dimensions || p.format || 'Unknown Format';
+      } else {
+        specKey = 'default';
+        specLabel = 'Mixed';
+      }
+      
+      const groupKey = `${channel}-${specKey}`;
+      
+      if (!groups[groupKey]) {
+        groups[groupKey] = {
+          id: groupKey,
+          channel: channel,
+          channelName: CHANNELS.find(c => c.id === channel)?.name || channel,
+          publisher: publisher,
+          specs: specKey,
+          specLabel: specLabel,
+          placements: [],
+          minStartDate: null,
+          maxEndDate: null,
+          earliestDueDate: null,
+        };
+      }
+      
+      // Add placement with unique ID and group reference
+      const placementWithMeta = {
+        ...p,
+        _importId: p._importId || `import-${Date.now()}-${index}`,
+        _groupId: groupKey,
+        _calculatedDueDate: p._calculatedDueDate || calculateDueDate(p.startDate, dueDateBuffer),
+      };
+      
+      groups[groupKey].placements.push(placementWithMeta);
+      
+      // Update group date ranges
+      if (placementWithMeta.startDate) {
+        if (!groups[groupKey].minStartDate || placementWithMeta.startDate < groups[groupKey].minStartDate) {
+          groups[groupKey].minStartDate = placementWithMeta.startDate;
+        }
+      }
+      if (placementWithMeta.endDate) {
+        if (!groups[groupKey].maxEndDate || placementWithMeta.endDate > groups[groupKey].maxEndDate) {
+          groups[groupKey].maxEndDate = placementWithMeta.endDate;
+        }
+      }
+      if (placementWithMeta._calculatedDueDate) {
+        if (!groups[groupKey].earliestDueDate || placementWithMeta._calculatedDueDate < groups[groupKey].earliestDueDate) {
+          groups[groupKey].earliestDueDate = placementWithMeta._calculatedDueDate;
+        }
+      }
+    });
+    
+    return Object.values(groups);
+  }
+  
+  function markAsDifferentCreative(groupId, placementId) {
+    setGroupedPlacements(prev => {
+      const newGroups = [...prev];
+      const sourceGroupIndex = newGroups.findIndex(g => g.id === groupId);
+      if (sourceGroupIndex === -1) return prev;
+      
+      const sourceGroup = newGroups[sourceGroupIndex];
+      const placementIndex = sourceGroup.placements.findIndex(p => p._importId === placementId);
+      if (placementIndex === -1) return prev;
+      
+      // Remove placement from source group
+      const [placement] = sourceGroup.placements.splice(placementIndex, 1);
+      
+      // Create new group ID
+      const newGroupId = `${groupId}-split-${Date.now()}`;
+      placement._groupId = newGroupId;
+      
+      // Create new group
+      const newGroup = {
+        id: newGroupId,
+        channel: sourceGroup.channel,
+        channelName: sourceGroup.channelName,
+        publisher: sourceGroup.publisher,
+        specs: sourceGroup.specs,
+        specLabel: `${sourceGroup.specLabel} (Alt)`,
+        placements: [placement],
+        minStartDate: placement.startDate,
+        maxEndDate: placement.endDate,
+        earliestDueDate: placement._calculatedDueDate,
+        isSplit: true,
+      };
+      
+      // Remove source group if empty
+      if (sourceGroup.placements.length === 0) {
+        newGroups.splice(sourceGroupIndex, 1);
+      }
+      
+      newGroups.push(newGroup);
+      return newGroups;
+    });
+  }
+  
+  function mergeBackToGroup(splitGroupId, targetGroupId) {
+    setGroupedPlacements(prev => {
+      const newGroups = [...prev];
+      const splitGroupIndex = newGroups.findIndex(g => g.id === splitGroupId);
+      const targetGroupIndex = newGroups.findIndex(g => g.id === targetGroupId);
+      
+      if (splitGroupIndex === -1 || targetGroupIndex === -1) return prev;
+      
+      const splitGroup = newGroups[splitGroupIndex];
+      const targetGroup = newGroups[targetGroupIndex];
+      
+      // Move all placements back
+      splitGroup.placements.forEach(p => {
+        p._groupId = targetGroupId;
+        targetGroup.placements.push(p);
+      });
+      
+      // Recalculate target group dates
+      recalculateGroupDates(targetGroup);
+      
+      // Remove split group
+      newGroups.splice(splitGroupIndex, 1);
+      
+      return newGroups;
+    });
+  }
+  
+  function recalculateGroupDates(group) {
+    group.minStartDate = null;
+    group.maxEndDate = null;
+    group.earliestDueDate = null;
+    
+    group.placements.forEach(p => {
+      if (p.startDate) {
+        if (!group.minStartDate || p.startDate < group.minStartDate) {
+          group.minStartDate = p.startDate;
+        }
+      }
+      if (p.endDate) {
+        if (!group.maxEndDate || p.endDate > group.maxEndDate) {
+          group.maxEndDate = p.endDate;
+        }
+      }
+      if (p._calculatedDueDate) {
+        if (!group.earliestDueDate || p._calculatedDueDate < group.earliestDueDate) {
+          group.earliestDueDate = p._calculatedDueDate;
+        }
+      }
+    });
+  }
+  
+  function toggleGroupExpanded(groupId) {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  }
+
+  // ============================================
+  // TIMELINE CALCULATIONS
+  // ============================================
+  
+  const timelineData = useMemo(() => {
+    const allGroups = groupedPlacements.length > 0 ? groupedPlacements : [];
+    if (allGroups.length === 0) return null;
+    
+    // Find overall date range
+    let minDate = null;
+    let maxDate = null;
+    
+    allGroups.forEach(group => {
+      if (group.minStartDate) {
+        if (!minDate || group.minStartDate < minDate) minDate = group.minStartDate;
+      }
+      if (group.maxEndDate) {
+        if (!maxDate || group.maxEndDate > maxDate) maxDate = group.maxEndDate;
+      }
+    });
+    
+    if (!minDate || !maxDate) return null;
+    
+    // Add some padding (1 week before/after)
+    const start = new Date(minDate);
+    start.setDate(start.getDate() - 7);
+    const end = new Date(maxDate);
+    end.setDate(end.getDate() + 7);
+    
+    const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+    
+    // Generate month markers
+    const months = [];
+    const current = new Date(start);
+    current.setDate(1);
+    while (current <= end) {
+      const monthStart = new Date(current);
+      const daysFromStart = Math.ceil((monthStart - start) / (1000 * 60 * 60 * 24));
+      const position = Math.max(0, (daysFromStart / totalDays) * 100);
+      
+      months.push({
+        label: monthStart.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }),
+        position,
+      });
+      
+      current.setMonth(current.getMonth() + 1);
+    }
+    
+    // Calculate bar positions for each group
+    const bars = allGroups.map(group => {
+      const groupStart = new Date(group.minStartDate || minDate);
+      const groupEnd = new Date(group.maxEndDate || maxDate);
+      
+      const startDays = Math.ceil((groupStart - start) / (1000 * 60 * 60 * 24));
+      const endDays = Math.ceil((groupEnd - start) / (1000 * 60 * 60 * 24));
+      
+      const left = (startDays / totalDays) * 100;
+      const width = ((endDays - startDays) / totalDays) * 100;
+      
+      return {
+        ...group,
+        left: Math.max(0, left),
+        width: Math.max(2, width), // Minimum 2% width for visibility
+      };
+    });
+    
+    return { start, end, totalDays, months, bars };
+  }, [groupedPlacements]);
+
+  // ============================================
+  // CART FUNCTIONS
+  // ============================================
 
   function addToCart(placement) {
     const publisher = SPECS[selectedChannel].publishers.find(p => p.id === selectedPublisher);
@@ -84,13 +348,18 @@ export default function NewBrief() {
     setCart(cart.map(i => ({ ...i, dueDate: date })));
   }
 
-  // Schedule import functions
+  // ============================================
+  // IMPORT FUNCTIONS
+  // ============================================
+
   function openImportModal() {
     setShowImportModal(true);
     setImportError(null);
     setImportSuccess(null);
     setParsedPlacements([]);
+    setGroupedPlacements([]);
     setSelectedImports(new Set());
+    setExpandedGroups(new Set());
     setImportChannel('ooh');
     setImportPublisher('');
   }
@@ -103,10 +372,10 @@ export default function NewBrief() {
     setImportError(null);
     setImportSuccess(null);
     setParsedPlacements([]);
+    setGroupedPlacements([]);
     
     const formData = new FormData();
     formData.append('file', file);
-    // Don't send channel/publisher - let AI detect
     
     try {
       const res = await fetch('/api/parse-schedule', {
@@ -118,31 +387,28 @@ export default function NewBrief() {
       console.log('Parse response:', data);
       
       if (!res.ok) {
-        let errorMsg = data.error || 'Failed to parse schedule';
-        if (data.debug?.steps) {
-          console.log('Debug steps:', data.debug.steps);
-        }
-        throw new Error(errorMsg);
+        throw new Error(data.error || 'Failed to parse schedule');
       }
       
       if (!data.placements || data.placements.length === 0) {
-        throw new Error('No placements found in the document. Check the file contains schedule data.');
+        throw new Error('No placements found in the document.');
       }
       
-      // Set detected channel/publisher from AI
+      // Set detected values
       const detectedChannel = data.detectedChannel || 'ooh';
       const detectedPublisher = data.detectedPublisher || '';
       setImportChannel(detectedChannel);
       setImportPublisher(detectedPublisher);
       
-      const placementsWithIds = data.placements.map((p, i) => ({
-        ...p,
-        _importId: `import-${Date.now()}-${i}`,
-        _calculatedDueDate: calculateDueDate(p.startDate, dueDateBuffer),
-      }));
+      // Store raw placements
+      setParsedPlacements(data.placements);
       
-      setParsedPlacements(placementsWithIds);
-      setSelectedImports(new Set(placementsWithIds.map(p => p._importId)));
+      // Auto-group the placements
+      const groups = autoGroupPlacements(data.placements, detectedChannel, detectedPublisher);
+      setGroupedPlacements(groups);
+      
+      // Select all by default
+      setSelectedImports(new Set(data.placements.map(p => p._importId || `import-${Date.now()}-${data.placements.indexOf(p)}`)));
       
     } catch (err) {
       console.error('Import error:', err);
@@ -164,18 +430,67 @@ export default function NewBrief() {
     }
   }
   
-  function toggleImportSelection(importId) {
-    const newSelected = new Set(selectedImports);
-    if (newSelected.has(importId)) {
-      newSelected.delete(importId);
-    } else {
-      newSelected.add(importId);
-    }
-    setSelectedImports(newSelected);
+  function updateDueDateBuffer(newBuffer) {
+    setDueDateBuffer(newBuffer);
+    
+    // Recalculate due dates for all grouped placements
+    setGroupedPlacements(prev => prev.map(group => {
+      const updatedPlacements = group.placements.map(p => ({
+        ...p,
+        _calculatedDueDate: calculateDueDate(p.startDate, newBuffer),
+      }));
+      
+      // Recalculate earliest due date
+      let earliestDueDate = null;
+      updatedPlacements.forEach(p => {
+        if (p._calculatedDueDate && (!earliestDueDate || p._calculatedDueDate < earliestDueDate)) {
+          earliestDueDate = p._calculatedDueDate;
+        }
+      });
+      
+      return {
+        ...group,
+        placements: updatedPlacements,
+        earliestDueDate,
+      };
+    }));
+  }
+  
+  function toggleGroupSelection(groupId) {
+    const group = groupedPlacements.find(g => g.id === groupId);
+    if (!group) return;
+    
+    const groupPlacementIds = group.placements.map(p => p._importId);
+    const allSelected = groupPlacementIds.every(id => selectedImports.has(id));
+    
+    setSelectedImports(prev => {
+      const next = new Set(prev);
+      groupPlacementIds.forEach(id => {
+        if (allSelected) {
+          next.delete(id);
+        } else {
+          next.add(id);
+        }
+      });
+      return next;
+    });
+  }
+  
+  function togglePlacementSelection(placementId) {
+    setSelectedImports(prev => {
+      const next = new Set(prev);
+      if (next.has(placementId)) {
+        next.delete(placementId);
+      } else {
+        next.add(placementId);
+      }
+      return next;
+    });
   }
   
   function selectAllImports() {
-    setSelectedImports(new Set(parsedPlacements.map(p => p._importId)));
+    const allIds = groupedPlacements.flatMap(g => g.placements.map(p => p._importId));
+    setSelectedImports(new Set(allIds));
   }
   
   function deselectAllImports() {
@@ -183,73 +498,93 @@ export default function NewBrief() {
   }
   
   function addSelectedToCart() {
-    const channelName = CHANNELS.find(c => c.id === importChannel)?.name || 'Out of Home';
+    // Build cart items from grouped placements
+    const itemsToAdd = [];
     
-    const itemsToAdd = parsedPlacements
-      .filter(p => selectedImports.has(p._importId))
-      .map(p => ({
-        id: p._importId,
-        placementId: `imported-${p.siteName}`,
-        channel: importChannel,
-        channelName: channelName,
-        state: p.state?.toLowerCase() || 'imported',
-        stateName: p.state || p.suburb || 'Imported',
-        publisher: importPublisher.toLowerCase().replace(/\s+/g, '-'),
-        publisherName: importPublisher || 'Unknown',
-        placementName: p.siteName,
-        location: p.location || null,
-        format: p.format || 'Digital Billboard',
-        specs: {
-          dimensions: p.dimensions,
-          physicalSize: p.physicalSize,
-          fileFormat: p.fileFormat,
-          adLength: p.spotLength ? `${p.spotLength} seconds` : null,
-          dayPart: p.daypart || null,
-          spotCount: p.spots || null,
-          panelId: p.panelId || null,
-          direction: p.direction || null,
-        },
-        notes: p.notes || null,
-        restrictions: p.restrictions ? (Array.isArray(p.restrictions) ? p.restrictions : [p.restrictions]) : [],
-        dueDate: p._calculatedDueDate || '',
-        flightStart: p.startDate,
-        flightEnd: p.endDate,
-        status: 'briefed',
-      }));
+    groupedPlacements.forEach(group => {
+      const selectedInGroup = group.placements.filter(p => selectedImports.has(p._importId));
+      
+      selectedInGroup.forEach(p => {
+        itemsToAdd.push({
+          id: p._importId,
+          placementId: `imported-${p.siteName}`,
+          channel: importChannel,
+          channelName: group.channelName,
+          state: p.state?.toLowerCase() || 'imported',
+          stateName: p.state || p.suburb || 'Imported',
+          publisher: importPublisher.toLowerCase().replace(/\s+/g, '-'),
+          publisherName: importPublisher || 'Unknown',
+          placementName: p.siteName,
+          location: p.location || null,
+          format: p.format || 'Digital Billboard',
+          specs: {
+            dimensions: p.dimensions,
+            physicalSize: p.physicalSize,
+            fileFormat: p.fileFormat,
+            adLength: p.spotLength ? `${p.spotLength} seconds` : null,
+            dayPart: p.daypart || null,
+            spotCount: p.spots || null,
+            panelId: p.panelId || null,
+            direction: p.direction || null,
+          },
+          notes: p.notes || null,
+          restrictions: p.restrictions ? (Array.isArray(p.restrictions) ? p.restrictions : [p.restrictions]) : [],
+          dueDate: p._calculatedDueDate || '',
+          flightStart: p.startDate,
+          flightEnd: p.endDate,
+          status: 'briefed',
+          // Group info
+          creativeGroupId: p._groupId,
+          creativeGroupName: group.specLabel,
+        });
+      });
+    });
     
     setCart([...cart, ...itemsToAdd]);
-    // Show success and allow uploading more
-    setImportSuccess(`Added ${itemsToAdd.length} placement${itemsToAdd.length !== 1 ? 's' : ''} to brief`);
+    setImportSuccess(`Added ${itemsToAdd.length} placement${itemsToAdd.length !== 1 ? 's' : ''} in ${groupedPlacements.filter(g => g.placements.some(p => selectedImports.has(p._importId))).length} creative groups`);
     setParsedPlacements([]);
+    setGroupedPlacements([]);
     setSelectedImports(new Set());
-    // Reset for next upload
     setImportChannel('ooh');
     setImportPublisher('');
-    // Clear success after 3 seconds
     setTimeout(() => setImportSuccess(null), 3000);
-  }
-  
-  function updateDueDateBuffer(newBuffer) {
-    setDueDateBuffer(newBuffer);
-    setParsedPlacements(prev => prev.map(p => ({
-      ...p,
-      _calculatedDueDate: calculateDueDate(p.startDate, newBuffer),
-    })));
   }
   
   function closeImportModal() {
     setShowImportModal(false);
     setParsedPlacements([]);
+    setGroupedPlacements([]);
     setSelectedImports(new Set());
     setImportError(null);
     setImportSuccess(null);
   }
+
+  // ============================================
+  // SAVE BRIEF
+  // ============================================
 
   async function handleSave() {
     if (!clientName || !campaignName || cart.length === 0) return;
     
     setSaving(true);
     try {
+      // Group cart items for saving
+      const groups = {};
+      cart.forEach(item => {
+        const groupId = item.creativeGroupId || `${item.channel}-${item.specs?.dimensions || 'default'}`;
+        if (!groups[groupId]) {
+          groups[groupId] = {
+            id: groupId,
+            name: item.creativeGroupName || item.specs?.dimensions || 'Group',
+            channel: item.channel,
+            channelName: item.channelName,
+            specs: item.specs,
+            placements: [],
+          };
+        }
+        groups[groupId].placements.push(item);
+      });
+      
       const res = await fetch('/api/briefs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -257,6 +592,7 @@ export default function NewBrief() {
           clientName,
           campaignName,
           items: cart,
+          groups: Object.values(groups),
         }),
       });
       const data = await res.json();
@@ -267,13 +603,44 @@ export default function NewBrief() {
     }
   }
 
-  // Group cart items by channel for display
-  const cartByChannel = cart.reduce((acc, item) => {
-    const channel = item.channelName || 'Other';
-    if (!acc[channel]) acc[channel] = [];
-    acc[channel].push(item);
-    return acc;
-  }, {});
+  // ============================================
+  // CART GROUPING FOR DISPLAY
+  // ============================================
+  
+  const cartByGroup = useMemo(() => {
+    const groups = {};
+    cart.forEach(item => {
+      const groupId = item.creativeGroupId || `${item.channel}-${item.specs?.dimensions || 'default'}`;
+      if (!groups[groupId]) {
+        groups[groupId] = {
+          id: groupId,
+          name: item.creativeGroupName || item.specs?.dimensions || 'Group',
+          channel: item.channel,
+          channelName: item.channelName,
+          items: [],
+          earliestDue: null,
+          minStart: null,
+          maxEnd: null,
+        };
+      }
+      groups[groupId].items.push(item);
+      
+      if (item.dueDate && (!groups[groupId].earliestDue || item.dueDate < groups[groupId].earliestDue)) {
+        groups[groupId].earliestDue = item.dueDate;
+      }
+      if (item.flightStart && (!groups[groupId].minStart || item.flightStart < groups[groupId].minStart)) {
+        groups[groupId].minStart = item.flightStart;
+      }
+      if (item.flightEnd && (!groups[groupId].maxEnd || item.flightEnd > groups[groupId].maxEnd)) {
+        groups[groupId].maxEnd = item.flightEnd;
+      }
+    });
+    return Object.values(groups);
+  }, [cart]);
+
+  // ============================================
+  // RENDER
+  // ============================================
 
   return (
     <div className="min-h-screen bg-sunny-dark">
@@ -357,7 +724,6 @@ export default function NewBrief() {
                     <span className="font-medium">{clientName} - {campaignName}</span>
                   </div>
                   
-                  {/* Import Schedule Button */}
                   <button
                     onClick={openImportModal}
                     className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
@@ -493,7 +859,7 @@ export default function NewBrief() {
               </div>
             </div>
 
-            {/* Right: Cart */}
+            {/* Right: Cart Summary */}
             <div className="col-span-4">
               <div className="bg-sunny-gray border border-gray-700 rounded-xl p-6 sticky top-24">
                 <h3 className="font-semibold mb-4">Brief Summary</h3>
@@ -505,61 +871,44 @@ export default function NewBrief() {
                   </div>
                 ) : (
                   <>
-                    {/* Bulk due date setter */}
-                    <div className="mb-4 pb-4 border-b border-gray-700">
-                      <label className="block text-xs text-gray-400 mb-2">Set all due dates:</label>
-                      <input
-                        type="date"
-                        onChange={(e) => setAllDueDates(e.target.value)}
-                        className="w-full bg-sunny-dark border border-gray-700 rounded px-3 py-2 text-sm"
-                      />
+                    {/* Summary stats */}
+                    <div className="mb-4 p-3 bg-sunny-dark rounded-lg">
+                      <div className="text-2xl font-bold text-sunny-yellow">{cartByGroup.length}</div>
+                      <div className="text-sm text-gray-400">unique creatives needed</div>
+                      <div className="text-xs text-gray-500 mt-1">{cart.length} total placements</div>
                     </div>
                     
-                    {/* Cart items grouped by channel */}
-                    <div className="space-y-4 max-h-[calc(100vh-400px)] overflow-y-auto">
-                      {Object.entries(cartByChannel).map(([channel, items]) => (
-                        <div key={channel}>
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="text-sm font-medium text-gray-300">{channel}</span>
-                            <span className="text-xs bg-sunny-yellow text-black px-2 py-0.5 rounded-full">
-                              {items.length}
-                            </span>
-                          </div>
-                          <div className="space-y-2">
-                            {items.map((item) => (
-                              <div
-                                key={item.id}
-                                className="bg-sunny-dark rounded-lg p-3 border border-gray-700"
-                              >
-                                <div className="flex items-start justify-between mb-2">
-                                  <div className="flex-1 min-w-0">
-                                    <div className="font-medium text-sm truncate">{item.placementName}</div>
-                                    <div className="text-xs text-gray-400">{item.publisherName}</div>
-                                    {item.flightStart && (
-                                      <div className="text-xs text-blue-400 mt-1">
-                                        Flight: {item.flightStart} → {item.flightEnd}
-                                      </div>
-                                    )}
-                                  </div>
-                                  <button
-                                    onClick={() => removeFromCart(item.id)}
-                                    className="text-gray-500 hover:text-red-400 ml-2"
-                                  >
-                                    ×
-                                  </button>
-                                </div>
-                                <input
-                                  type="date"
-                                  value={item.dueDate}
-                                  onChange={(e) => updateDueDate(item.id, e.target.value)}
-                                  placeholder="Due date"
-                                  className="w-full bg-sunny-gray border border-gray-600 rounded px-2 py-1 text-xs"
-                                />
+                    {/* Grouped items */}
+                    <div className="space-y-3 max-h-[calc(100vh-450px)] overflow-y-auto">
+                      {cartByGroup.map((group) => {
+                        const colors = CHANNEL_COLORS[group.channel] || CHANNEL_COLORS.ooh;
+                        return (
+                          <div
+                            key={group.id}
+                            className={`rounded-lg border ${colors.border} ${colors.light} p-3`}
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <div>
+                                <div className="font-medium text-sm">{group.name}</div>
+                                <div className="text-xs text-gray-400">{group.channelName} • {group.items.length} placements</div>
                               </div>
-                            ))}
+                              <span className={`text-xs px-2 py-1 rounded ${colors.bg} text-white`}>
+                                {group.items.length}
+                              </span>
+                            </div>
+                            {group.earliestDue && (
+                              <div className="text-xs text-gray-400">
+                                Due: {group.earliestDue}
+                              </div>
+                            )}
+                            {group.minStart && group.maxEnd && (
+                              <div className="text-xs text-gray-500">
+                                Flight: {group.minStart} → {group.maxEnd}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                     
                     {/* Save button */}
@@ -568,7 +917,7 @@ export default function NewBrief() {
                       disabled={saving}
                       className="w-full mt-4 bg-sunny-yellow text-black font-semibold py-3 rounded-lg hover:bg-yellow-400 transition-colors disabled:opacity-50"
                     >
-                      {saving ? 'Creating Brief...' : `Create Brief (${cart.length} items)`}
+                      {saving ? 'Creating Brief...' : `Create Brief (${cartByGroup.length} creatives)`}
                     </button>
                   </>
                 )}
@@ -581,9 +930,9 @@ export default function NewBrief() {
       {/* Import Schedule Modal */}
       {showImportModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-sunny-gray border border-gray-700 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+          <div className="bg-sunny-gray border border-gray-700 rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
             {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-gray-700 flex items-center justify-between">
+            <div className="px-6 py-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
               <div>
                 <h2 className="text-lg font-semibold">Import Schedule</h2>
                 <p className="text-sm text-gray-400">Upload a media schedule to auto-populate placements</p>
@@ -598,37 +947,15 @@ export default function NewBrief() {
 
             {/* Modal Content */}
             <div className="p-6 overflow-y-auto flex-1">
-              {/* Upload Area - shown when no parsed placements */}
-              {parsedPlacements.length === 0 && (
+              {/* Upload Area - shown when no results */}
+              {groupedPlacements.length === 0 && (
                 <div className="space-y-4">
-                  {/* Success message */}
                   {importSuccess && (
                     <div className="p-4 bg-green-900/30 border border-green-700 rounded-lg text-green-300 flex items-center gap-2">
                       <span>✓</span> {importSuccess}
                     </div>
                   )}
                   
-                  {/* Due date buffer slider */}
-                  <div className="flex items-center justify-between p-4 bg-sunny-dark rounded-lg">
-                    <label className="text-sm text-gray-400">Creative deadline:</label>
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs text-gray-500">1</span>
-                      <input
-                        type="range"
-                        min="1"
-                        max="21"
-                        value={dueDateBuffer}
-                        onChange={(e) => setDueDateBuffer(parseInt(e.target.value))}
-                        className="w-32 accent-sunny-yellow"
-                      />
-                      <span className="text-xs text-gray-500">21</span>
-                      <span className="text-sm font-medium text-sunny-yellow w-24 text-right">
-                        {dueDateBuffer} day{dueDateBuffer !== 1 ? 's' : ''} before
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* File Upload */}
                   <input
                     ref={importFileRef}
                     type="file"
@@ -663,14 +990,32 @@ export default function NewBrief() {
                 </div>
               )}
 
-              {/* Parsed Results - shown after upload */}
-              {parsedPlacements.length > 0 && (
-                <div>
+              {/* Results - Grouped View with Timeline */}
+              {groupedPlacements.length > 0 && (
+                <div className="space-y-6">
                   {/* Confirm Channel & Publisher */}
-                  <div className="mb-6 p-4 bg-sunny-dark rounded-lg border border-gray-700">
-                    <div className="flex items-center gap-2 mb-3">
-                      <span className="text-sm font-medium">Confirm details</span>
-                      <span className="text-xs text-gray-500">(AI detected, adjust if needed)</span>
+                  <div className="p-4 bg-sunny-dark rounded-lg border border-gray-700">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">Confirm details</span>
+                        <span className="text-xs text-gray-500">(AI detected)</span>
+                      </div>
+                      
+                      {/* Due date slider - MOVED HERE */}
+                      <div className="flex items-center gap-3">
+                        <label className="text-sm text-gray-400">Due:</label>
+                        <input
+                          type="range"
+                          min="1"
+                          max="21"
+                          value={dueDateBuffer}
+                          onChange={(e) => updateDueDateBuffer(parseInt(e.target.value))}
+                          className="w-24 accent-sunny-yellow"
+                        />
+                        <span className="text-sm font-medium text-sunny-yellow w-20">
+                          {dueDateBuffer}d before
+                        </span>
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
@@ -681,7 +1026,7 @@ export default function NewBrief() {
                             setImportChannel(e.target.value);
                             setImportPublisher('');
                           }}
-                          className="w-full bg-sunny-gray border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sunny-yellow"
+                          className="w-full bg-sunny-gray border border-gray-600 rounded-lg px-3 py-2 text-sm"
                         >
                           <option value="ooh">Out of Home</option>
                           <option value="tv">TV</option>
@@ -694,7 +1039,7 @@ export default function NewBrief() {
                         <select
                           value={importPublisher}
                           onChange={(e) => setImportPublisher(e.target.value)}
-                          className="w-full bg-sunny-gray border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sunny-yellow"
+                          className="w-full bg-sunny-gray border border-gray-600 rounded-lg px-3 py-2 text-sm"
                         >
                           <option value="">Select publisher...</option>
                           {IMPORT_PUBLISHERS[importChannel]?.map((pub) => (
@@ -705,18 +1050,23 @@ export default function NewBrief() {
                     </div>
                   </div>
                   
-                  {/* Controls */}
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-4">
-                      <span className="text-sm text-gray-400">
-                        {selectedImports.size} of {parsedPlacements.length} selected
+                  {/* Summary */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-2xl font-bold text-sunny-yellow">{groupedPlacements.length}</span>
+                      <span className="text-gray-400 ml-2">creative{groupedPlacements.length !== 1 ? 's' : ''} needed</span>
+                      <span className="text-gray-500 text-sm ml-2">
+                        ({groupedPlacements.reduce((sum, g) => sum + g.placements.length, 0)} placements)
                       </span>
+                    </div>
+                    <div className="flex items-center gap-2">
                       <button
                         onClick={selectAllImports}
                         className="text-sm text-sunny-yellow hover:underline"
                       >
                         Select all
                       </button>
+                      <span className="text-gray-600">|</span>
                       <button
                         onClick={deselectAllImports}
                         className="text-sm text-gray-400 hover:underline"
@@ -724,76 +1074,172 @@ export default function NewBrief() {
                         Deselect all
                       </button>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <label className="text-sm text-gray-400">Due date:</label>
-                      <input
-                        type="range"
-                        min="1"
-                        max="21"
-                        value={dueDateBuffer}
-                        onChange={(e) => updateDueDateBuffer(parseInt(e.target.value))}
-                        className="w-24 accent-sunny-yellow"
-                      />
-                      <span className="text-sm font-medium text-sunny-yellow w-20">
-                        {dueDateBuffer} day{dueDateBuffer !== 1 ? 's' : ''} before
-                      </span>
-                    </div>
                   </div>
-
-                  {/* Placements List */}
-                  <div className="space-y-2 max-h-[350px] overflow-y-auto">
-                    {parsedPlacements.map((p) => (
-                      <div
-                        key={p._importId}
-                        onClick={() => toggleImportSelection(p._importId)}
-                        className={`p-4 rounded-lg border cursor-pointer transition-all ${
-                          selectedImports.has(p._importId)
-                            ? 'border-sunny-yellow bg-sunny-yellow/10'
-                            : 'border-gray-700 hover:border-gray-500'
-                        }`}
-                      >
-                        <div className="flex items-start gap-4">
-                          <div className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${
-                            selectedImports.has(p._importId)
-                              ? 'border-sunny-yellow bg-sunny-yellow'
-                              : 'border-gray-600'
-                          }`}>
-                            {selectedImports.has(p._importId) && (
-                              <span className="text-black text-xs">✓</span>
-                            )}
+                  
+                  {/* Timeline */}
+                  {timelineData && (
+                    <div className="bg-sunny-dark rounded-lg p-4 border border-gray-700">
+                      <h4 className="text-sm font-medium text-gray-400 mb-3">Flight Plan</h4>
+                      
+                      {/* Month labels */}
+                      <div className="relative h-6 mb-2">
+                        {timelineData.months.map((month, i) => (
+                          <div
+                            key={i}
+                            className="absolute text-xs text-gray-500"
+                            style={{ left: `${month.position}%` }}
+                          >
+                            {month.label}
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="font-medium">{p.siteName}</span>
-                            </div>
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-400">
-                              {p.dimensions && <div>📐 {p.dimensions}</div>}
-                              {p.spotLength && <div>⏱️ {p.spotLength} sec</div>}
-                              {p.daypart && <div>🕐 {p.daypart}</div>}
-                              {p.spots && <div>🔢 {p.spots} spots</div>}
-                              {p.station && <div>📻 {p.station}</div>}
-                              {p.startDate && <div>📅 {p.startDate} → {p.endDate}</div>}
-                              {p._calculatedDueDate && <div>⏰ Due: {p._calculatedDueDate}</div>}
-                              {(p.location || p.suburb) && <div className="col-span-2">📍 {p.location || `${p.suburb}, ${p.state}`}</div>}
-                              {p.restrictions && (
-                                <div className="col-span-2 text-amber-400">⚠️ {p.restrictions}</div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
+                        ))}
                       </div>
-                    ))}
+                      
+                      {/* Timeline bars */}
+                      <div className="space-y-2">
+                        {timelineData.bars.map((bar) => {
+                          const colors = CHANNEL_COLORS[bar.channel] || CHANNEL_COLORS.ooh;
+                          const isSelected = bar.placements.some(p => selectedImports.has(p._importId));
+                          
+                          return (
+                            <div key={bar.id} className="relative h-8">
+                              {/* Track */}
+                              <div className="absolute inset-0 bg-gray-800 rounded" />
+                              
+                              {/* Bar */}
+                              <div
+                                className={`absolute h-full rounded cursor-pointer transition-all ${colors.bg} ${isSelected ? 'opacity-100' : 'opacity-40'}`}
+                                style={{ left: `${bar.left}%`, width: `${bar.width}%` }}
+                                onClick={() => toggleGroupExpanded(bar.id)}
+                              >
+                                <div className="px-2 py-1 text-xs text-white truncate">
+                                  {bar.specLabel} ({bar.placements.length})
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Grouped Placements */}
+                  <div className="space-y-3">
+                    {groupedPlacements.map((group) => {
+                      const colors = CHANNEL_COLORS[group.channel] || CHANNEL_COLORS.ooh;
+                      const isExpanded = expandedGroups.has(group.id);
+                      const selectedCount = group.placements.filter(p => selectedImports.has(p._importId)).length;
+                      const allSelected = selectedCount === group.placements.length;
+                      
+                      return (
+                        <div
+                          key={group.id}
+                          className={`rounded-lg border ${colors.border} overflow-hidden`}
+                        >
+                          {/* Group Header */}
+                          <div
+                            className={`p-4 ${colors.light} cursor-pointer`}
+                            onClick={() => toggleGroupExpanded(group.id)}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <div
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleGroupSelection(group.id);
+                                  }}
+                                  className={`w-5 h-5 rounded border-2 flex items-center justify-center cursor-pointer ${
+                                    allSelected
+                                      ? 'border-sunny-yellow bg-sunny-yellow'
+                                      : selectedCount > 0
+                                        ? 'border-sunny-yellow bg-sunny-yellow/50'
+                                        : 'border-gray-600'
+                                  }`}
+                                >
+                                  {allSelected && <span className="text-black text-xs">✓</span>}
+                                  {!allSelected && selectedCount > 0 && <span className="text-black text-xs">−</span>}
+                                </div>
+                                
+                                <div>
+                                  <div className="font-medium">{group.specLabel}</div>
+                                  <div className="text-sm text-gray-400">
+                                    {group.channelName} • {group.placements.length} placement{group.placements.length !== 1 ? 's' : ''}
+                                    {group.isSplit && <span className="ml-2 text-amber-400">(split)</span>}
+                                  </div>
+                                </div>
+                              </div>
+                              
+                              <div className="flex items-center gap-4">
+                                {group.earliestDueDate && (
+                                  <div className="text-sm">
+                                    <span className="text-gray-500">Due:</span>
+                                    <span className="ml-1 text-white">{group.earliestDueDate}</span>
+                                  </div>
+                                )}
+                                <span className="text-gray-400">{isExpanded ? '▼' : '▶'}</span>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Expanded Placements */}
+                          {isExpanded && (
+                            <div className="border-t border-gray-700 divide-y divide-gray-700">
+                              {group.placements.map((p) => {
+                                const isSelected = selectedImports.has(p._importId);
+                                
+                                return (
+                                  <div
+                                    key={p._importId}
+                                    className={`p-3 flex items-center gap-3 ${isSelected ? 'bg-sunny-dark/50' : 'bg-sunny-dark'}`}
+                                  >
+                                    <div
+                                      onClick={() => togglePlacementSelection(p._importId)}
+                                      className={`w-4 h-4 rounded border-2 flex items-center justify-center cursor-pointer flex-shrink-0 ${
+                                        isSelected
+                                          ? 'border-sunny-yellow bg-sunny-yellow'
+                                          : 'border-gray-600'
+                                      }`}
+                                    >
+                                      {isSelected && <span className="text-black text-xs">✓</span>}
+                                    </div>
+                                    
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-sm font-medium truncate">{p.siteName}</div>
+                                      <div className="text-xs text-gray-500">
+                                        {p.startDate && `${p.startDate} → ${p.endDate}`}
+                                        {p.location && ` • ${p.location}`}
+                                      </div>
+                                    </div>
+                                    
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        markAsDifferentCreative(group.id, p._importId);
+                                      }}
+                                      className="text-xs text-gray-400 hover:text-amber-400 px-2 py-1 rounded hover:bg-gray-700 flex-shrink-0"
+                                      title="Mark as different creative"
+                                    >
+                                      Split ↗
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
             </div>
 
             {/* Modal Footer */}
-            {parsedPlacements.length > 0 && (
-              <div className="px-6 py-4 border-t border-gray-700 flex items-center justify-between">
+            {groupedPlacements.length > 0 && (
+              <div className="px-6 py-4 border-t border-gray-700 flex items-center justify-between flex-shrink-0">
                 <button
                   onClick={() => {
                     setParsedPlacements([]);
+                    setGroupedPlacements([]);
                     setSelectedImports(new Set());
                   }}
                   className="text-sm text-gray-400 hover:text-white"
@@ -801,6 +1247,9 @@ export default function NewBrief() {
                   ← Upload different file
                 </button>
                 <div className="flex items-center gap-3">
+                  <span className="text-sm text-gray-400">
+                    {selectedImports.size} of {groupedPlacements.reduce((sum, g) => sum + g.placements.length, 0)} selected
+                  </span>
                   <button
                     onClick={() => {
                       addSelectedToCart();
@@ -808,7 +1257,7 @@ export default function NewBrief() {
                     disabled={selectedImports.size === 0 || !importPublisher}
                     className="px-4 py-2 border border-sunny-yellow text-sunny-yellow rounded-lg hover:bg-sunny-yellow/10 transition-colors disabled:opacity-50 disabled:border-gray-600 disabled:text-gray-500"
                   >
-                    Add & Upload More
+                    Add & Import More
                   </button>
                   <button
                     onClick={() => {
@@ -818,17 +1267,17 @@ export default function NewBrief() {
                     disabled={selectedImports.size === 0 || !importPublisher}
                     className="bg-sunny-yellow text-black font-semibold px-6 py-2 rounded-lg hover:bg-yellow-400 transition-colors disabled:opacity-50 disabled:bg-gray-600"
                   >
-                    Add {selectedImports.size} & Done
+                    Add & Done
                   </button>
                 </div>
               </div>
             )}
             
-            {/* Show cart count in modal when items added */}
-            {parsedPlacements.length === 0 && cart.length > 0 && (
-              <div className="px-6 py-3 border-t border-gray-700 flex items-center justify-between bg-sunny-dark/50">
+            {/* Cart count when back at upload */}
+            {groupedPlacements.length === 0 && cart.length > 0 && (
+              <div className="px-6 py-3 border-t border-gray-700 flex items-center justify-between bg-sunny-dark/50 flex-shrink-0">
                 <span className="text-sm text-gray-400">
-                  {cart.length} item{cart.length !== 1 ? 's' : ''} in brief
+                  {cart.length} placement{cart.length !== 1 ? 's' : ''} in brief ({cartByGroup.length} creatives)
                 </span>
                 <button
                   onClick={closeImportModal}
