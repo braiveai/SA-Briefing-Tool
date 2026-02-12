@@ -1,7 +1,7 @@
 import { put, list } from '@vercel/blob';
 import { NextResponse } from 'next/server';
 
-// GET /api/brief/[briefId] - Get single brief
+// GET /api/brief/[briefId]
 export async function GET(request, { params }) {
   try {
     const { briefId } = await params;
@@ -22,13 +22,12 @@ export async function GET(request, { params }) {
   }
 }
 
-// PUT /api/brief/[briefId] - Full update brief
+// PUT /api/brief/[briefId] - Full update
 export async function PUT(request, { params }) {
   try {
     const { briefId } = await params;
     const body = await request.json();
 
-    // Get existing brief
     const { blobs } = await list({ prefix: `briefs/${briefId}.json` });
     
     if (blobs.length === 0) {
@@ -38,15 +37,13 @@ export async function PUT(request, { params }) {
     const res = await fetch(blobs[0].url);
     const existingBrief = await res.json();
 
-    // Merge updates
     const updatedBrief = {
       ...existingBrief,
       ...body,
-      id: briefId, // Ensure ID doesn't change
+      id: briefId,
       updatedAt: new Date().toISOString(),
     };
 
-    // Save updated brief
     await put(`briefs/${briefId}.json`, JSON.stringify(updatedBrief), {
       access: 'public',
       contentType: 'application/json',
@@ -60,13 +57,12 @@ export async function PUT(request, { params }) {
   }
 }
 
-// PATCH /api/brief/[briefId] - Partial update (e.g., group status)
+// PATCH /api/brief/[briefId] - Partial updates (status, uploads)
 export async function PATCH(request, { params }) {
   try {
     const { briefId } = await params;
     const updates = await request.json();
 
-    // Get existing brief
     const { blobs } = await list({ prefix: `briefs/${briefId}.json` });
     
     if (blobs.length === 0) {
@@ -78,34 +74,39 @@ export async function PATCH(request, { params }) {
 
     // Handle group status update
     if (updates.groupId && updates.status) {
-      brief.groups = (brief.groups || []).map(group => 
-        group.id === updates.groupId 
-          ? { ...group, status: updates.status }
-          : group
-      );
+      // Update in groups array if it exists
+      if (brief.groups) {
+        brief.groups = brief.groups.map(channelGroup => ({
+          ...channelGroup,
+          specs: channelGroup.specs?.map(spec => 
+            spec.id === updates.groupId 
+              ? { ...spec, status: updates.status }
+              : spec
+          ) || []
+        }));
+      }
     }
     
-    // Handle group upload update
+    // Handle group upload
     if (updates.groupId && updates.uploadUrl) {
-      brief.groups = (brief.groups || []).map(group => 
-        group.id === updates.groupId 
-          ? { ...group, uploadUrl: updates.uploadUrl, uploadedAt: new Date().toISOString() }
-          : group
-      );
+      if (brief.groups) {
+        brief.groups = brief.groups.map(channelGroup => ({
+          ...channelGroup,
+          specs: channelGroup.specs?.map(spec => 
+            spec.id === updates.groupId 
+              ? { ...spec, uploadUrl: updates.uploadUrl, uploadedAt: new Date().toISOString() }
+              : spec
+          ) || []
+        }));
+      }
     }
-    
-    // Handle individual placement status update
-    if (updates.placementId && updates.status) {
-      brief.items = (brief.items || []).map(item => 
-        item.id === updates.placementId 
-          ? { ...item, status: updates.status }
-          : item
-      );
-    }
+
+    // Handle basic field updates
+    if (updates.clientName) brief.clientName = updates.clientName;
+    if (updates.campaignName) brief.campaignName = updates.campaignName;
 
     brief.updatedAt = new Date().toISOString();
 
-    // Save updated brief
     await put(`briefs/${briefId}.json`, JSON.stringify(brief), {
       access: 'public',
       contentType: 'application/json',
