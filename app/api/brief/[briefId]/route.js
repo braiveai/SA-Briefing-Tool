@@ -104,6 +104,7 @@ export async function PATCH(request, { params }) {
     // Handle basic field updates
     if (updates.clientName) brief.clientName = updates.clientName;
     if (updates.campaignName) brief.campaignName = updates.campaignName;
+    if (updates.dueDateBuffer !== undefined) brief.dueDateBuffer = updates.dueDateBuffer;
 
     brief.updatedAt = new Date().toISOString();
 
