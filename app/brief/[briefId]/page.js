@@ -245,8 +245,71 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded }) {
       {/* Expanded Content */}
       {isExpanded && (
         <div className="border-t border-white/10">
+          {/* File Specs */}
+          {(() => {
+            const firstPlacement = spec.placements[0];
+            const fileSpecs = firstPlacement?.specs || {};
+            const restrictions = firstPlacement?.restrictions || [];
+            
+            return (
+              <>
+                <div className="p-4 bg-black/20 grid grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <div className="text-xs text-white/40 mb-1">Dimensions</div>
+                    <div className="text-white/80">{spec.label}</div>
+                  </div>
+                  {fileSpecs.physicalSize && (
+                    <div>
+                      <div className="text-xs text-white/40 mb-1">Physical Size</div>
+                      <div className="text-white/80">{fileSpecs.physicalSize}</div>
+                    </div>
+                  )}
+                  {fileSpecs.fileFormat && (
+                    <div>
+                      <div className="text-xs text-white/40 mb-1">File Format</div>
+                      <div className="text-white/80">{fileSpecs.fileFormat}</div>
+                    </div>
+                  )}
+                  {(fileSpecs.adLength || fileSpecs.spotLength) && (
+                    <div>
+                      <div className="text-xs text-white/40 mb-1">Duration</div>
+                      <div className="text-white/80">{fileSpecs.adLength || `${fileSpecs.spotLength}s`}</div>
+                    </div>
+                  )}
+                  {fileSpecs.direction && (
+                    <div>
+                      <div className="text-xs text-white/40 mb-1">Direction</div>
+                      <div className="text-white/80">{fileSpecs.direction}</div>
+                    </div>
+                  )}
+                  {fileSpecs.panelId && (
+                    <div>
+                      <div className="text-xs text-white/40 mb-1">Panel ID</div>
+                      <div className="text-white/80">{fileSpecs.panelId}</div>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Restrictions */}
+                {restrictions.length > 0 && (
+                  <div className="px-4 py-3 bg-amber-500/10 border-t border-amber-500/20">
+                    <div className="flex items-start gap-2">
+                      <span className="text-amber-400">⚠️</span>
+                      <div>
+                        <div className="text-xs font-medium text-amber-400 mb-1">Restrictions</div>
+                        <div className="text-xs text-amber-300/80">
+                          {Array.isArray(restrictions) ? restrictions.join(' • ') : restrictions}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+          
           {/* Upload Area */}
-          <div className="p-4 bg-black/20">
+          <div className="p-4 border-t border-white/5">
             <div className="border-2 border-dashed border-white/20 rounded-xl p-5 text-center hover:border-sunny-yellow/50 hover:bg-sunny-yellow/5 transition-all cursor-pointer group">
               <div className="text-xl mb-1 group-hover:scale-110 transition-transform">📁</div>
               <div className="text-sm text-white/70">Upload creative</div>
@@ -255,11 +318,11 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded }) {
           </div>
           
           {/* Placements List */}
-          <div className="max-h-64 overflow-y-auto">
+          <div className="max-h-64 overflow-y-auto border-t border-white/5">
             {spec.placements.map((p, idx) => (
               <div 
                 key={p.id || idx} 
-                className="px-4 py-2.5 flex items-center gap-3 border-t border-white/5 hover:bg-white/5"
+                className="px-4 py-2.5 flex items-center gap-3 border-b border-white/5 last:border-0 hover:bg-white/5"
               >
                 <div className="w-5 h-5 rounded bg-white/10 flex items-center justify-center text-xs text-white/40 flex-shrink-0">
                   {idx + 1}
@@ -271,8 +334,13 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded }) {
                       .filter(Boolean).join(' • ')}
                   </div>
                 </div>
+                {p.dueDate && (
+                  <div className="text-xs text-white/50 mr-2">
+                    Due: {formatDate(p.dueDate)}
+                  </div>
+                )}
                 <button className="text-xs text-white/40 hover:text-sunny-yellow px-2 py-1 rounded hover:bg-white/10 flex-shrink-0">
-                  Upload
+                  Upload ↗
                 </button>
               </div>
             ))}
@@ -302,6 +370,124 @@ function getDaysUntil(dateStr) {
   if (!dateStr) return null;
   const days = Math.ceil((new Date(dateStr) - new Date()) / (1000 * 60 * 60 * 24));
   return days;
+}
+
+// ============================================
+// TIMELINE COMPONENT
+// ============================================
+function FlightTimeline({ channelData }) {
+  // Flatten all specs for timeline
+  const allSpecs = [];
+  Object.entries(channelData).forEach(([channelKey, channel]) => {
+    Object.values(channel.specs).forEach(spec => {
+      if (spec.minStart && spec.maxEnd) {
+        allSpecs.push({ ...spec, channel: channelKey });
+      }
+    });
+  });
+  
+  if (allSpecs.length === 0) return null;
+  
+  // Find date range
+  let minDate = null;
+  let maxDate = null;
+  allSpecs.forEach(spec => {
+    if (!minDate || spec.minStart < minDate) minDate = spec.minStart;
+    if (!maxDate || spec.maxEnd > maxDate) maxDate = spec.maxEnd;
+  });
+  
+  const start = new Date(minDate);
+  start.setDate(start.getDate() - 7);
+  const end = new Date(maxDate);
+  end.setDate(end.getDate() + 7);
+  const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+  
+  // Month markers
+  const months = [];
+  const current = new Date(start);
+  current.setDate(1);
+  while (current <= end) {
+    const daysFromStart = Math.ceil((current - start) / (1000 * 60 * 60 * 24));
+    months.push({
+      label: current.toLocaleDateString('en-AU', { month: 'short' }),
+      position: Math.max(0, (daysFromStart / totalDays) * 100),
+    });
+    current.setMonth(current.getMonth() + 1);
+  }
+  
+  const channelColors = {
+    ooh: 'bg-blue-500',
+    tv: 'bg-purple-500',
+    radio: 'bg-amber-500',
+    digital: 'bg-green-500',
+  };
+  
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-2xl p-6 mb-8">
+      <h3 className="font-semibold mb-4">Flight Plan</h3>
+      
+      {/* Month labels */}
+      <div className="relative h-6 mb-2">
+        {months.map((month, i) => (
+          <div
+            key={i}
+            className="absolute text-xs text-white/40"
+            style={{ left: `${month.position}%` }}
+          >
+            {month.label}
+          </div>
+        ))}
+      </div>
+      
+      {/* Timeline bars */}
+      <div className="space-y-2">
+        {allSpecs.map((spec) => {
+          const specStart = new Date(spec.minStart);
+          const specEnd = new Date(spec.maxEnd);
+          const startDays = Math.ceil((specStart - start) / (1000 * 60 * 60 * 24));
+          const endDays = Math.ceil((specEnd - start) / (1000 * 60 * 60 * 24));
+          const left = (startDays / totalDays) * 100;
+          const width = Math.max(3, ((endDays - startDays) / totalDays) * 100);
+          
+          return (
+            <div key={spec.id} className="flex items-center gap-3">
+              <div className="w-28 text-xs text-white/60 truncate flex-shrink-0">
+                {spec.label}
+              </div>
+              <div className="flex-1 relative h-7 bg-white/5 rounded">
+                <div
+                  className={`absolute h-full rounded ${channelColors[spec.channel]} flex items-center px-2`}
+                  style={{ left: `${left}%`, width: `${width}%` }}
+                >
+                  <span className="text-xs text-white truncate">{spec.placements.length}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      
+      {/* Legend */}
+      <div className="flex items-center gap-4 mt-4 pt-4 border-t border-white/10">
+        <div className="flex items-center gap-1.5">
+          <div className="w-3 h-3 rounded bg-blue-500" />
+          <span className="text-xs text-white/50">OOH</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-3 h-3 rounded bg-purple-500" />
+          <span className="text-xs text-white/50">TV</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-3 h-3 rounded bg-amber-500" />
+          <span className="text-xs text-white/50">Radio</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-3 h-3 rounded bg-green-500" />
+          <span className="text-xs text-white/50">Digital</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ============================================
@@ -500,7 +686,8 @@ export default function BriefPage() {
               <button onClick={() => router.push('/')} className="text-white/50 hover:text-white">
                 ←
               </button>
-              <div>
+              <img src="/sunny-logo-white.png" alt="Sunny" className="h-6" />
+              <div className="border-l border-white/20 pl-4">
                 <h1 className="text-xl font-semibold">{brief.clientName}</h1>
                 <p className="text-sm text-white/50">{brief.campaignName}</p>
               </div>
@@ -548,6 +735,9 @@ export default function BriefPage() {
             <div className="text-sm text-white/60 mt-1">Due Soon</div>
           </div>
         </div>
+
+        {/* Flight Plan Timeline */}
+        <FlightTimeline channelData={channelData} />
 
         {/* Creative Requirements by Channel */}
         <div className="space-y-10">
