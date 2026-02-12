@@ -88,9 +88,9 @@ export default function NewBrief() {
   const [importError, setImportError] = useState(null);
   const [parsedPlacements, setParsedPlacements] = useState([]);
   const [selectedImports, setSelectedImports] = useState(new Set());
-  const [dueDateBuffer, setDueDateBuffer] = useState(5);
   const [detectedChannel, setDetectedChannel] = useState('ooh');
   const [detectedPublisher, setDetectedPublisher] = useState('');
+  const [publisherSpecs, setPublisherSpecs] = useState(null);
   const importFileRef = useRef(null);
   
   // Get available options based on selections
@@ -236,16 +236,16 @@ export default function NewBrief() {
       // Use AI-detected values
       setDetectedChannel(data.detectedChannel || 'ooh');
       setDetectedPublisher(data.detectedPublisher || '');
+      setPublisherSpecs(data.publisherSpecs || null);
       
-      // Add calculated due dates
-      const placementsWithDates = data.placements.map((p, i) => ({
+      // Just add import IDs, due dates will be calculated in brief view
+      const placementsWithIds = data.placements.map((p, i) => ({
         ...p,
         _importId: p._importId || `import-${Date.now()}-${i}`,
-        _calculatedDueDate: calculateDueDate(p.startDate, dueDateBuffer),
       }));
       
-      setParsedPlacements(placementsWithDates);
-      setSelectedImports(new Set(placementsWithDates.map(p => p._importId)));
+      setParsedPlacements(placementsWithIds);
+      setSelectedImports(new Set(placementsWithIds.map(p => p._importId)));
       
     } catch (err) {
       console.error('Import error:', err);
@@ -256,23 +256,18 @@ export default function NewBrief() {
     e.target.value = '';
   }
   
-  function calculateDueDate(startDate, bufferDays) {
-    if (!startDate) return '';
+  // Format date as DD/MM/YY for display
+  function formatDateShort(dateStr) {
+    if (!dateStr) return '—';
     try {
-      const date = new Date(startDate);
-      date.setDate(date.getDate() - bufferDays);
-      return date.toISOString().split('T')[0];
+      const date = new Date(dateStr);
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = (date.getMonth() + 1).toString().padStart(2, '0');
+      const year = date.getFullYear().toString().slice(-2);
+      return `${day}/${month}/${year}`;
     } catch {
-      return '';
+      return dateStr;
     }
-  }
-  
-  function updateDueDateBuffer(newBuffer) {
-    setDueDateBuffer(newBuffer);
-    setParsedPlacements(prev => prev.map(p => ({
-      ...p,
-      _calculatedDueDate: calculateDueDate(p.startDate, newBuffer),
-    })));
   }
   
   function toggleImportSelection(importId) {
@@ -307,7 +302,7 @@ export default function NewBrief() {
         publisher: detectedPublisher?.toLowerCase().replace(/\s+/g, '-') || 'unknown',
         publisherName: detectedPublisher || 'Unknown',
         placementName: p.siteName,
-        location: p.location || null,
+        location: p.location || p.suburb || null,
         format: p.format || null,
         specs: {
           dimensions: p.dimensions,
@@ -315,10 +310,19 @@ export default function NewBrief() {
           spotLength: p.spotLength,
           panelId: p.panelId || null,
           direction: p.direction || null,
+          fileType: p.fileType || null,
+          slotLength: p.slotLength || null,
+          // Publisher-level specs from document header
+          fileFormat: publisherSpecs?.fileFormat || null,
+          maxFileSize: publisherSpecs?.maxFileSize || null,
+          dpi: publisherSpecs?.dpi || null,
+          videoSpecs: publisherSpecs?.videoSpecs || null,
+          leadTime: publisherSpecs?.leadTime || null,
+          deliveryEmail: publisherSpecs?.deliveryEmail || null,
         },
-        notes: p.notes || null,
+        notes: publisherSpecs?.notes || p.notes || null,
         restrictions: p.restrictions ? (Array.isArray(p.restrictions) ? p.restrictions : [p.restrictions]) : [],
-        dueDate: p._calculatedDueDate || '',
+        dueDate: null, // Will be calculated in brief view with slider
         flightStart: p.startDate,
         flightEnd: p.endDate,
         status: 'briefed',
@@ -328,6 +332,7 @@ export default function NewBrief() {
     setShowImportModal(false);
     setParsedPlacements([]);
     setSelectedImports(new Set());
+    setPublisherSpecs(null);
   }
 
   // ============================================
@@ -351,10 +356,14 @@ export default function NewBrief() {
     }
   }
 
+  // Format date as DD Mon for display
   function formatDate(dateStr) {
     if (!dateStr) return '—';
     try {
-      return new Date(dateStr).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+      const date = new Date(dateStr);
+      const day = date.getDate();
+      const month = date.toLocaleDateString('en-AU', { month: 'short' });
+      return `${day} ${month}`;
     } catch {
       return dateStr;
     }
@@ -369,10 +378,10 @@ export default function NewBrief() {
       <header className="border-b border-gray-800 bg-sunny-gray sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <button onClick={() => router.push('/')} className="text-gray-400 hover:text-white">
-              ← Back
-            </button>
-            <h1 className="text-xl font-semibold">New Creative Brief</h1>
+            <img src="/sunny-logo-white.png" alt="Sunny" className="h-6" />
+            <div className="border-l border-white/20 pl-4">
+              <h1 className="text-xl font-semibold">New Creative Brief</h1>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-gray-400">{totalCreatives} creative{totalCreatives !== 1 ? 's' : ''}</span>
@@ -747,22 +756,6 @@ export default function NewBrief() {
                     </div>
                   </div>
                   
-                  {/* Due date slider */}
-                  <div className="flex items-center gap-4 p-3 bg-sunny-dark rounded-lg">
-                    <label className="text-sm text-gray-400 whitespace-nowrap">Creative due:</label>
-                    <input
-                      type="range"
-                      min="1"
-                      max="21"
-                      value={dueDateBuffer}
-                      onChange={(e) => updateDueDateBuffer(parseInt(e.target.value))}
-                      className="flex-1 accent-sunny-yellow"
-                    />
-                    <span className="text-sm font-medium text-sunny-yellow w-24 text-right">
-                      {dueDateBuffer} days before
-                    </span>
-                  </div>
-                  
                   {/* Summary */}
                   <div className="flex items-center justify-between">
                     <div className="text-sm">
@@ -781,7 +774,7 @@ export default function NewBrief() {
                   </div>
                   
                   {/* Placements list */}
-                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                  <div className="space-y-2 max-h-[350px] overflow-y-auto">
                     {parsedPlacements.map((p) => (
                       <div
                         key={p._importId}
@@ -804,14 +797,9 @@ export default function NewBrief() {
                             <div className="font-medium text-sm truncate">{p.siteName}</div>
                             <div className="text-xs text-gray-400">
                               {p.dimensions || (p.spotLength && `${p.spotLength}s`)}
-                              {p.startDate && ` • ${p.startDate} → ${p.endDate}`}
+                              {p.startDate && ` • ${formatDateShort(p.startDate)} → ${formatDateShort(p.endDate)}`}
                             </div>
                           </div>
-                          {p._calculatedDueDate && (
-                            <div className="text-xs text-gray-500">
-                              Due: {p._calculatedDueDate}
-                            </div>
-                          )}
                         </div>
                       </div>
                     ))}
