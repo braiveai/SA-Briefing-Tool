@@ -23,7 +23,6 @@ export async function POST(request) {
 
     const formData = await request.formData();
     const file = formData.get('file');
-    // Channel/publisher are optional - AI will detect if not provided
     const providedChannel = formData.get('channel') || null;
     const providedPublisher = formData.get('publisher') || null;
 
@@ -56,11 +55,9 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
-    // Use provided values or AI-detected values
     const detectedChannel = providedChannel || result.detectedChannel || 'ooh';
     const detectedPublisher = providedPublisher || result.detectedPublisher || '';
 
-    // Apply channel to all placements
     const placements = result.placements.map(p => ({
       ...p,
       channel: detectedChannel,
@@ -118,9 +115,49 @@ function extractFromExcel(buffer) {
 
 async function parsePDFWithVision(openai, buffer, providedChannel, debugInfo) {
   const base64PDF = buffer.toString('base64');
-  const systemPrompt = getSystemPrompt(providedChannel);
 
   debugInfo.steps.push('Calling OpenAI vision...');
+
+  const systemPrompt = `You are a media schedule data extractor. Your job is to extract placement data from media schedules and return it as JSON.
+
+CRITICAL: You must return ONLY valid JSON. No markdown code blocks, no explanation text, no preamble. Your entire response must be parseable JSON starting with { and ending with }
+
+Return this exact structure:
+{
+  "mediaType": "radio|tv|ooh|digital",
+  "publisher": "detected publisher name",
+  "placements": [...]
+}
+
+DETECTION RULES:
+- If you see radio stations (AM/FM, MHz), dayparts like Breakfast/Drive, spot lengths → mediaType: "radio"
+- If you see TV channels, programs, networks → mediaType: "tv"  
+- If you see billboards, panels, pixel dimensions, street addresses → mediaType: "ooh"
+- If you see impressions, CPM, digital platforms → mediaType: "digital"
+
+PUBLISHER DETECTION:
+- ARN logo or "ARN" text → publisher: "ARN"
+- SCA, Triple M, Hit Network → publisher: "SCA"
+- Nova → publisher: "Nova"
+- JCDecaux → publisher: "JCDecaux"
+- LUMO → publisher: "LUMO"
+- QMS → publisher: "QMS"
+- oOh! media → publisher: "oOh!"
+
+FOR RADIO SCHEDULES, extract each unique line item with:
+- siteName: station name (e.g., "Gold AM/FM Bendigo - Breakfast 15s")
+- station: just the station (e.g., "Gold AM/FM Bendigo")
+- daypart: e.g., "Breakfast", "Morning", "Drive", "Evening"
+- spotLength: duration in seconds (15, 30, 60)
+- spots: total spot count for that line
+- startDate: YYYY-MM-DD format
+- endDate: YYYY-MM-DD format
+- classification: "Commercial" or "Live Read" etc.
+
+FOR OOH SCHEDULES, extract:
+- siteName, panelId, dimensions (WxH px), location, suburb, state, startDate, endDate, restrictions, direction
+
+Convert all dates to YYYY-MM-DD. Use the contract start/end dates shown in the header.`;
 
   const response = await openai.chat.completions.create({
     model: 'gpt-4o',
@@ -138,36 +175,81 @@ async function parsePDFWithVision(openai, buffer, providedChannel, debugInfo) {
           },
           {
             type: 'text',
-            text: 'Extract all placements from this media schedule PDF.',
+            text: 'Extract all placements from this media schedule. Return ONLY the JSON object, nothing else.',
           },
         ],
       },
     ],
     max_tokens: 16000,
+    temperature: 0.1,
   });
 
   const responseText = response.choices[0].message.content;
   debugInfo.steps.push('OpenAI vision responded');
+  debugInfo.rawResponsePreview = responseText.substring(0, 500);
 
-  let jsonStr = responseText;
-  const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1].trim();
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(jsonStr);
-  } catch (e) {
-    debugInfo.rawResponse = responseText.substring(0, 500);
-    throw new Error('Failed to parse AI response as JSON');
-  }
-
-  let placements = parsed.placements || parsed || [];
+  // Try multiple methods to extract JSON
+  let parsed = null;
   
+  // Clean the response - remove markdown code blocks if present
+  let cleanedResponse = responseText.trim();
+  
+  // Remove ```json ... ``` wrapper
+  const codeBlockMatch = cleanedResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (codeBlockMatch) {
+    cleanedResponse = codeBlockMatch[1].trim();
+  }
+  
+  // Method 1: Try parsing the cleaned response directly
+  try {
+    parsed = JSON.parse(cleanedResponse);
+    debugInfo.steps.push('Parsed JSON directly');
+  } catch (e1) {
+    debugInfo.steps.push(`Direct parse failed: ${e1.message}`);
+    
+    // Method 2: Find JSON object boundaries
+    const jsonStart = cleanedResponse.indexOf('{');
+    const jsonEnd = cleanedResponse.lastIndexOf('}');
+    
+    if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+      const jsonStr = cleanedResponse.substring(jsonStart, jsonEnd + 1);
+      try {
+        parsed = JSON.parse(jsonStr);
+        debugInfo.steps.push('Parsed JSON from substring');
+      } catch (e2) {
+        debugInfo.steps.push(`Substring parse failed: ${e2.message}`);
+      }
+    }
+    
+    // Method 3: Try to find and parse just the array
+    if (!parsed) {
+      const arrayStart = cleanedResponse.indexOf('[');
+      const arrayEnd = cleanedResponse.lastIndexOf(']');
+      
+      if (arrayStart !== -1 && arrayEnd !== -1 && arrayEnd > arrayStart) {
+        const arrayStr = cleanedResponse.substring(arrayStart, arrayEnd + 1);
+        try {
+          const arr = JSON.parse(arrayStr);
+          parsed = { placements: arr };
+          debugInfo.steps.push('Parsed JSON array');
+        } catch (e3) {
+          debugInfo.steps.push(`Array parse failed: ${e3.message}`);
+        }
+      }
+    }
+  }
+  
+  if (!parsed) {
+    debugInfo.rawResponse = responseText;
+    throw new Error('Failed to parse AI response as JSON. Please try uploading an Excel or CSV version of this schedule.');
+  }
+
+  let placements = parsed.placements || [];
+  
+  // If placements is not an array, look for array in the parsed object
   if (!Array.isArray(placements)) {
     for (const key of Object.keys(parsed)) {
-      if (Array.isArray(parsed[key])) {
+      if (Array.isArray(parsed[key]) && parsed[key].length > 0) {
         placements = parsed[key];
         break;
       }
@@ -175,14 +257,15 @@ async function parsePDFWithVision(openai, buffer, providedChannel, debugInfo) {
   }
 
   if (placements.length === 0) {
-    throw new Error('No placements found in PDF.');
+    throw new Error('No placements found in PDF. The document may not contain recognizable schedule data.');
   }
 
-  // Detect channel and publisher from the data
+  // Detect channel and publisher
   const detected = detectChannelAndPublisher(placements, parsed);
   const channel = providedChannel || detected.channel;
   
   const normalized = placements.map((p, i) => normalizePlacement(p, channel, i));
+  
   return { 
     placements: normalized,
     detectedChannel: detected.channel,
@@ -245,7 +328,6 @@ async function parseWithAI(openai, content, providedChannel, debugInfo) {
     throw new Error('No placements found in file.');
   }
 
-  // Detect channel and publisher from the data
   const detected = detectChannelAndPublisher(placements, parsed);
   const channel = providedChannel || detected.channel;
 
@@ -258,168 +340,114 @@ async function parseWithAI(openai, content, providedChannel, debugInfo) {
 }
 
 function detectChannelAndPublisher(placements, parsed) {
-  // Check if AI returned these at the top level
   let channel = parsed.mediaType || parsed.channel || null;
   let publisher = parsed.publisher || parsed.mediaOwner || null;
   
-  // If not found, try to infer from data patterns
   if (!channel) {
-    const firstPlacement = placements[0] || {};
     const allText = JSON.stringify(placements).toLowerCase();
     
-    // Check for TV indicators
-    if (allText.includes('spot length') || allText.includes('program') || 
-        allText.includes('network') || allText.includes('tvc') ||
-        firstPlacement.spotLength || firstPlacement.program) {
-      channel = 'tv';
-    }
-    // Check for Radio indicators
-    else if (allText.includes('radio') || allText.includes('breakfast') || 
-             allText.includes('drive time') || allText.includes('station')) {
+    // Radio indicators
+    if (allText.includes('breakfast') || allText.includes('drive') || 
+        allText.includes('am/fm') || allText.includes('radio') ||
+        allText.includes('spot length') || allText.includes('live read')) {
       channel = 'radio';
     }
-    // Check for Digital indicators
+    // TV indicators
+    else if (allText.includes('program') || allText.includes('network') || 
+             allText.includes('tvc') || allText.includes('channel 7') ||
+             allText.includes('channel 9') || allText.includes('channel 10')) {
+      channel = 'tv';
+    }
+    // Digital indicators
     else if (allText.includes('impressions') || allText.includes('cpm') || 
-             allText.includes('click') || allText.includes('banner') ||
-             allText.includes('programmatic')) {
+             allText.includes('click') || allText.includes('banner')) {
       channel = 'digital';
     }
-    // Check for OOH indicators (default)
-    else if (allText.includes('panel') || allText.includes('billboard') || 
-             allText.includes('portrait') || allText.includes('landscape') ||
-             allText.includes('street furniture') || allText.includes('pixel') ||
-             firstPlacement.dimensions || firstPlacement.panelId) {
-      channel = 'ooh';
-    }
+    // OOH indicators (default)
     else {
-      channel = 'ooh'; // Default
+      channel = 'ooh';
     }
   }
   
-  // Try to detect publisher from data
   if (!publisher) {
     const allText = JSON.stringify(placements).toLowerCase();
     
-    // OOH Publishers
-    if (allText.includes('lumo')) publisher = 'LUMO';
+    // Radio publishers
+    if (allText.includes('arn') || allText.includes('kiis') || allText.includes('gold fm') || allText.includes('gold am')) {
+      publisher = 'ARN';
+    } else if (allText.includes('sca') || allText.includes('triple m') || allText.includes('hit ')) {
+      publisher = 'SCA';
+    } else if (allText.includes('nova')) {
+      publisher = 'Nova';
+    } else if (allText.includes('ace radio')) {
+      publisher = 'ACE Radio';
+    }
+    // OOH publishers
+    else if (allText.includes('lumo')) publisher = 'LUMO';
     else if (allText.includes('jcdecaux')) publisher = 'JCDecaux';
     else if (allText.includes('qms')) publisher = 'QMS';
     else if (allText.includes('ooh!') || allText.includes('ooh media')) publisher = 'oOh!';
-    else if (allText.includes('bishopp')) publisher = 'Bishopp';
-    else if (allText.includes('goa ')) publisher = 'GOA';
-    // TV Networks
+    // TV publishers
     else if (allText.includes('seven') || allText.includes('channel 7')) publisher = 'Seven';
     else if (allText.includes('nine') || allText.includes('channel 9')) publisher = 'Nine';
     else if (allText.includes('ten') || allText.includes('channel 10')) publisher = 'Ten';
-    else if (allText.includes('foxtel')) publisher = 'Foxtel';
-    // Radio Networks
-    else if (allText.includes('arn') || allText.includes('kiis') || allText.includes('pure gold')) publisher = 'ARN';
-    else if (allText.includes('sca') || allText.includes('triple m') || allText.includes('hit ')) publisher = 'SCA';
-    else if (allText.includes('nova')) publisher = 'Nova';
-    // Digital
-    else if (allText.includes('google') || allText.includes('dv360')) publisher = 'Google';
-    else if (allText.includes('meta') || allText.includes('facebook') || allText.includes('instagram')) publisher = 'Meta';
   }
   
   return { channel, publisher };
 }
 
 function getSystemPrompt(providedChannel) {
-  const basePrompt = `You extract placement data from media schedules. Return JSON: {"placements": [...], "mediaType": "ooh|tv|radio|digital", "publisher": "detected publisher name or null"}
+  const basePrompt = `You extract placement data from media schedules. Return JSON: {"placements": [...], "mediaType": "ooh|tv|radio|digital", "publisher": "detected publisher name"}
 
 RULES:
-- Detect the media type (ooh, tv, radio, digital) from the content
-- Try to identify the publisher/media owner from the document
+- Detect the media type from the content
+- Try to identify the publisher/media owner
 - Convert all dates to YYYY-MM-DD
 - Extract EVERY row/placement
-- Omit empty fields
-- Combine any restrictions/prohibitions into one "restrictions" field`;
+- Omit empty fields`;
+
+  if (providedChannel === 'radio') {
+    return `${basePrompt}
+
+This is a RADIO schedule. Extract for each line:
+- siteName (station + daypart + duration, e.g., "Gold FM Bendigo - Breakfast 30s")
+- station
+- daypart (Breakfast, Morning, Drive, Evening, etc.)
+- spotLength (in seconds)
+- spots (total count)
+- startDate, endDate
+- classification (Commercial, Live Read, etc.)`;
+  }
 
   if (providedChannel === 'ooh') {
     return `${basePrompt}
 
 This is an OUT OF HOME schedule. Extract for each placement:
-- siteName (screen/panel name)
-- panelId (if shown)
-- dimensions (pixel size as "WxH px")
-- pixelWidth, pixelHeight (numbers)
-- location (address)
-- suburb, state
-- startDate, endDate
-- restrictions
-- direction (Inbound/Outbound if shown)
-- format`;
+- siteName, panelId, dimensions (WxH px), location, suburb, state
+- startDate, endDate, restrictions, direction, format`;
   }
 
   if (providedChannel === 'tv') {
     return `${basePrompt}
 
 This is a TV schedule. Extract for each placement:
-- siteName (use program or network name)
-- station/network
-- program
-- daypart (e.g., Peak, Off-Peak)
-- spotLength (in seconds)
-- startDate, endDate
-- spots (number of spots)`;
-  }
-
-  if (providedChannel === 'radio') {
-    return `${basePrompt}
-
-This is a RADIO schedule. Extract for each placement:
-- siteName (use station name)
-- station
-- daypart (e.g., Breakfast, Drive)
-- spotLength (in seconds)
-- startDate, endDate
-- spots (number of spots)`;
-  }
-
-  if (providedChannel === 'digital') {
-    return `${basePrompt}
-
-This is a DIGITAL schedule. Extract for each placement:
-- siteName (platform or placement name)
-- platform
-- format (e.g., Display, Video, Native)
-- dimensions
-- impressions
+- siteName, station/network, program, daypart
+- spotLength (seconds), spots (count)
 - startDate, endDate`;
   }
 
-  // No channel provided - AI should detect
   return `${basePrompt}
 
-IMPORTANT: First detect what type of media schedule this is:
-- OOH (Out of Home): billboards, street furniture, digital screens with pixel dimensions
-- TV: programs, networks, spot lengths, TVCs
-- Radio: stations, dayparts like Breakfast/Drive, spot lengths
-- Digital: impressions, CPM, banners, programmatic
-
-Then extract the appropriate fields for that media type.
-
-For OOH extract: siteName, panelId, dimensions, location, suburb, state, startDate, endDate, restrictions, direction, format
-For TV extract: siteName, station/network, program, daypart, spotLength, startDate, endDate, spots
-For Radio extract: siteName, station, daypart, spotLength, startDate, endDate, spots
-For Digital extract: siteName, platform, format, dimensions, impressions, startDate, endDate`;
+Detect the media type and extract appropriate fields:
+- RADIO: siteName, station, daypart, spotLength, spots, startDate, endDate
+- TV: siteName, station, program, daypart, spotLength, spots, startDate, endDate  
+- OOH: siteName, panelId, dimensions, location, suburb, state, startDate, endDate, restrictions
+- DIGITAL: siteName, platform, format, dimensions, impressions, startDate, endDate`;
 }
 
 function normalizePlacement(p, channel, index) {
-  let dimensions = p.dimensions || null;
-  if (!dimensions && p.pixelWidth && p.pixelHeight) {
-    dimensions = `${p.pixelWidth}x${p.pixelHeight} px`;
-  }
-  
-  const siteName = p.siteName || p.panelName || p.name || 
-                   p.station || p.network || p.publication || p.platform ||
-                   `Placement ${index + 1}`;
-
-  let restrictions = null;
-  if (p.restrictions || p.prohibitions) {
-    const parts = [p.restrictions, p.prohibitions].filter(Boolean);
-    restrictions = parts.join('; ').replace(/\|/g, ', ');
-  }
+  const siteName = p.siteName || p.name || p.station || p.panelName || 
+                   p.network || p.platform || `Placement ${index + 1}`;
 
   const base = {
     siteName,
@@ -428,7 +456,36 @@ function normalizePlacement(p, channel, index) {
     channel: channel,
   };
 
+  if (channel === 'radio') {
+    return {
+      ...base,
+      station: p.station || null,
+      daypart: p.daypart || p.dayPart || null,
+      spotLength: p.spotLength || p.duration || null,
+      spots: p.spots || p.spotCount || p.total || null,
+      classification: p.classification || p.type || null,
+      format: 'Radio Spot',
+    };
+  }
+
+  if (channel === 'tv') {
+    return {
+      ...base,
+      station: p.station || p.network || null,
+      program: p.program || null,
+      daypart: p.daypart || p.dayPart || null,
+      spotLength: p.spotLength || p.duration || null,
+      spots: p.spots || p.spotCount || null,
+      format: 'TV Spot',
+    };
+  }
+
   if (channel === 'ooh') {
+    let dimensions = p.dimensions || null;
+    if (!dimensions && p.pixelWidth && p.pixelHeight) {
+      dimensions = `${p.pixelWidth}x${p.pixelHeight} px`;
+    }
+    
     return {
       ...base,
       panelId: p.panelId || null,
@@ -437,20 +494,8 @@ function normalizePlacement(p, channel, index) {
       suburb: p.suburb || null,
       state: p.state || null,
       direction: p.direction || null,
-      restrictions,
+      restrictions: p.restrictions || null,
       format: p.format || 'Digital Billboard',
-    };
-  }
-
-  if (channel === 'tv' || channel === 'radio') {
-    return {
-      ...base,
-      station: p.station || p.network || null,
-      program: p.program || null,
-      daypart: p.daypart || p.dayPart || null,
-      spotLength: p.spotLength || p.duration || null,
-      spots: p.spots || p.spotCount || null,
-      format: p.format || (channel === 'tv' ? 'TV Spot' : 'Radio Spot'),
     };
   }
 
@@ -458,13 +503,13 @@ function normalizePlacement(p, channel, index) {
     return {
       ...base,
       platform: p.platform || null,
-      dimensions,
+      dimensions: p.dimensions || null,
       impressions: p.impressions || null,
       format: p.format || 'Digital Ad',
     };
   }
 
-  return { ...base, dimensions, restrictions, format: p.format || 'Media Placement' };
+  return { ...base, format: p.format || 'Media Placement' };
 }
 
 function normalizeDate(dateStr) {
@@ -472,16 +517,19 @@ function normalizeDate(dateStr) {
   
   const str = String(dateStr).trim();
   
+  // Already in YYYY-MM-DD format
   if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
     return str.substring(0, 10);
   }
   
+  // DD/MM/YYYY or DD.MM.YYYY format
   const ddmmyyyy = str.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
   if (ddmmyyyy) {
     const [, d, m, y] = ddmmyyyy;
     return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
   }
   
+  // Try native Date parsing
   const parsed = new Date(str);
   if (!isNaN(parsed.getTime())) {
     return parsed.toISOString().split('T')[0];
