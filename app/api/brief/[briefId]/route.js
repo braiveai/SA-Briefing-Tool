@@ -22,7 +22,7 @@ export async function GET(request, { params }) {
   }
 }
 
-// PUT /api/brief/[briefId] - Update brief
+// PUT /api/brief/[briefId] - Full update brief
 export async function PUT(request, { params }) {
   try {
     const { briefId } = await params;
@@ -56,6 +56,65 @@ export async function PUT(request, { params }) {
     return NextResponse.json(updatedBrief);
   } catch (error) {
     console.error('Error updating brief:', error);
+    return NextResponse.json({ error: 'Failed to update brief' }, { status: 500 });
+  }
+}
+
+// PATCH /api/brief/[briefId] - Partial update (e.g., group status)
+export async function PATCH(request, { params }) {
+  try {
+    const { briefId } = await params;
+    const updates = await request.json();
+
+    // Get existing brief
+    const { blobs } = await list({ prefix: `briefs/${briefId}.json` });
+    
+    if (blobs.length === 0) {
+      return NextResponse.json({ error: 'Brief not found' }, { status: 404 });
+    }
+
+    const res = await fetch(blobs[0].url);
+    const brief = await res.json();
+
+    // Handle group status update
+    if (updates.groupId && updates.status) {
+      brief.groups = (brief.groups || []).map(group => 
+        group.id === updates.groupId 
+          ? { ...group, status: updates.status }
+          : group
+      );
+    }
+    
+    // Handle group upload update
+    if (updates.groupId && updates.uploadUrl) {
+      brief.groups = (brief.groups || []).map(group => 
+        group.id === updates.groupId 
+          ? { ...group, uploadUrl: updates.uploadUrl, uploadedAt: new Date().toISOString() }
+          : group
+      );
+    }
+    
+    // Handle individual placement status update
+    if (updates.placementId && updates.status) {
+      brief.items = (brief.items || []).map(item => 
+        item.id === updates.placementId 
+          ? { ...item, status: updates.status }
+          : item
+      );
+    }
+
+    brief.updatedAt = new Date().toISOString();
+
+    // Save updated brief
+    await put(`briefs/${briefId}.json`, JSON.stringify(brief), {
+      access: 'public',
+      contentType: 'application/json',
+      addRandomSuffix: false,
+    });
+
+    return NextResponse.json(brief);
+  } catch (error) {
+    console.error('Error patching brief:', error);
     return NextResponse.json({ error: 'Failed to update brief' }, { status: 500 });
   }
 }
