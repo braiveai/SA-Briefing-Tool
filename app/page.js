@@ -38,6 +38,7 @@ export default function NewBrief() {
   const [dueDateBuffer, setDueDateBuffer] = useState(5);
   const [importChannel, setImportChannel] = useState('ooh');
   const [importPublisher, setImportPublisher] = useState('');
+  const [importSuccess, setImportSuccess] = useState(null);
   const importFileRef = useRef(null);
   
   // Get available options based on selections
@@ -87,6 +88,7 @@ export default function NewBrief() {
   function openImportModal() {
     setShowImportModal(true);
     setImportError(null);
+    setImportSuccess(null);
     setParsedPlacements([]);
     setSelectedImports(new Set());
     setImportChannel('ooh');
@@ -97,20 +99,14 @@ export default function NewBrief() {
     const file = e.target.files?.[0];
     if (!file) return;
     
-    if (!importPublisher) {
-      setImportError('Please select a publisher first');
-      e.target.value = '';
-      return;
-    }
-    
     setImporting(true);
     setImportError(null);
+    setImportSuccess(null);
     setParsedPlacements([]);
     
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('channel', importChannel);
-    formData.append('publisher', importPublisher);
+    // Don't send channel/publisher - let AI detect
     
     try {
       const res = await fetch('/api/parse-schedule', {
@@ -132,6 +128,12 @@ export default function NewBrief() {
       if (!data.placements || data.placements.length === 0) {
         throw new Error('No placements found in the document. Check the file contains schedule data.');
       }
+      
+      // Set detected channel/publisher from AI
+      const detectedChannel = data.detectedChannel || 'ooh';
+      const detectedPublisher = data.detectedPublisher || '';
+      setImportChannel(detectedChannel);
+      setImportPublisher(detectedPublisher);
       
       const placementsWithIds = data.placements.map((p, i) => ({
         ...p,
@@ -193,7 +195,7 @@ export default function NewBrief() {
         state: p.state?.toLowerCase() || 'imported',
         stateName: p.state || p.suburb || 'Imported',
         publisher: importPublisher.toLowerCase().replace(/\s+/g, '-'),
-        publisherName: importPublisher,
+        publisherName: importPublisher || 'Unknown',
         placementName: p.siteName,
         location: p.location || null,
         format: p.format || 'Digital Billboard',
@@ -216,9 +218,15 @@ export default function NewBrief() {
       }));
     
     setCart([...cart, ...itemsToAdd]);
-    setShowImportModal(false);
+    // Show success and allow uploading more
+    setImportSuccess(`Added ${itemsToAdd.length} placement${itemsToAdd.length !== 1 ? 's' : ''} to brief`);
     setParsedPlacements([]);
     setSelectedImports(new Set());
+    // Reset for next upload
+    setImportChannel('ooh');
+    setImportPublisher('');
+    // Clear success after 3 seconds
+    setTimeout(() => setImportSuccess(null), 3000);
   }
   
   function updateDueDateBuffer(newBuffer) {
@@ -227,6 +235,14 @@ export default function NewBrief() {
       ...p,
       _calculatedDueDate: calculateDueDate(p.startDate, newBuffer),
     })));
+  }
+  
+  function closeImportModal() {
+    setShowImportModal(false);
+    setParsedPlacements([]);
+    setSelectedImports(new Set());
+    setImportError(null);
+    setImportSuccess(null);
   }
 
   async function handleSave() {
@@ -573,7 +589,7 @@ export default function NewBrief() {
                 <p className="text-sm text-gray-400">Upload a media schedule to auto-populate placements</p>
               </div>
               <button
-                onClick={() => setShowImportModal(false)}
+                onClick={closeImportModal}
                 className="text-gray-400 hover:text-white text-xl"
               >
                 ×
@@ -582,38 +598,33 @@ export default function NewBrief() {
 
             {/* Modal Content */}
             <div className="p-6 overflow-y-auto flex-1">
-              {/* Channel & Publisher Selection */}
+              {/* Upload Area - shown when no parsed placements */}
               {parsedPlacements.length === 0 && (
-                <div className="space-y-4 mb-6">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-2">Channel</label>
-                      <select
-                        value={importChannel}
-                        onChange={(e) => {
-                          setImportChannel(e.target.value);
-                          setImportPublisher('');
-                        }}
-                        className="w-full bg-sunny-dark border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:border-sunny-yellow"
-                      >
-                        <option value="ooh">Out of Home</option>
-                        <option value="tv">TV</option>
-                        <option value="radio">Radio</option>
-                        <option value="digital">Digital</option>
-                      </select>
+                <div className="space-y-4">
+                  {/* Success message */}
+                  {importSuccess && (
+                    <div className="p-4 bg-green-900/30 border border-green-700 rounded-lg text-green-300 flex items-center gap-2">
+                      <span>✓</span> {importSuccess}
                     </div>
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-2">Publisher</label>
-                      <select
-                        value={importPublisher}
-                        onChange={(e) => setImportPublisher(e.target.value)}
-                        className="w-full bg-sunny-dark border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:border-sunny-yellow"
-                      >
-                        <option value="">Select publisher...</option>
-                        {IMPORT_PUBLISHERS[importChannel]?.map((pub) => (
-                          <option key={pub} value={pub}>{pub}</option>
-                        ))}
-                      </select>
+                  )}
+                  
+                  {/* Due date buffer slider */}
+                  <div className="flex items-center justify-between p-4 bg-sunny-dark rounded-lg">
+                    <label className="text-sm text-gray-400">Creative deadline:</label>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-500">1</span>
+                      <input
+                        type="range"
+                        min="1"
+                        max="21"
+                        value={dueDateBuffer}
+                        onChange={(e) => setDueDateBuffer(parseInt(e.target.value))}
+                        className="w-32 accent-sunny-yellow"
+                      />
+                      <span className="text-xs text-gray-500">21</span>
+                      <span className="text-sm font-medium text-sunny-yellow w-24 text-right">
+                        {dueDateBuffer} day{dueDateBuffer !== 1 ? 's' : ''} before
+                      </span>
                     </div>
                   </div>
 
@@ -626,19 +637,9 @@ export default function NewBrief() {
                     className="hidden"
                   />
                   <button
-                    onClick={() => {
-                      if (!importPublisher) {
-                        setImportError('Please select a publisher first');
-                        return;
-                      }
-                      importFileRef.current?.click();
-                    }}
-                    disabled={importing || !importPublisher}
-                    className={`w-full border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
-                      importPublisher 
-                        ? 'border-gray-600 hover:border-sunny-yellow cursor-pointer' 
-                        : 'border-gray-700 opacity-50 cursor-not-allowed'
-                    }`}
+                    onClick={() => importFileRef.current?.click()}
+                    disabled={importing}
+                    className="w-full border-2 border-dashed border-gray-600 rounded-xl p-12 text-center hover:border-sunny-yellow transition-colors disabled:opacity-50"
                   >
                     {importing ? (
                       <div className="flex flex-col items-center gap-3">
@@ -647,8 +648,8 @@ export default function NewBrief() {
                       </div>
                     ) : (
                       <div className="flex flex-col items-center gap-2">
-                        <div className="text-3xl">📄</div>
-                        <span className="font-medium">Click to upload schedule</span>
+                        <div className="text-4xl">📄</div>
+                        <span className="text-lg font-medium">Click to upload schedule</span>
                         <span className="text-sm text-gray-400">Supports Excel, CSV, and PDF files</span>
                       </div>
                     )}
@@ -662,9 +663,48 @@ export default function NewBrief() {
                 </div>
               )}
 
-              {/* Parsed Results */}
+              {/* Parsed Results - shown after upload */}
               {parsedPlacements.length > 0 && (
                 <div>
+                  {/* Confirm Channel & Publisher */}
+                  <div className="mb-6 p-4 bg-sunny-dark rounded-lg border border-gray-700">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-sm font-medium">Confirm details</span>
+                      <span className="text-xs text-gray-500">(AI detected, adjust if needed)</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">Channel</label>
+                        <select
+                          value={importChannel}
+                          onChange={(e) => {
+                            setImportChannel(e.target.value);
+                            setImportPublisher('');
+                          }}
+                          className="w-full bg-sunny-gray border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sunny-yellow"
+                        >
+                          <option value="ooh">Out of Home</option>
+                          <option value="tv">TV</option>
+                          <option value="radio">Radio</option>
+                          <option value="digital">Digital</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">Publisher</label>
+                        <select
+                          value={importPublisher}
+                          onChange={(e) => setImportPublisher(e.target.value)}
+                          className="w-full bg-sunny-gray border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sunny-yellow"
+                        >
+                          <option value="">Select publisher...</option>
+                          {IMPORT_PUBLISHERS[importChannel]?.map((pub) => (
+                            <option key={pub} value={pub}>{pub}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  
                   {/* Controls */}
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-4">
@@ -684,34 +724,24 @@ export default function NewBrief() {
                         Deselect all
                       </button>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm text-gray-400">Due date buffer:</label>
-                      <select
+                    <div className="flex items-center gap-3">
+                      <label className="text-sm text-gray-400">Due date:</label>
+                      <input
+                        type="range"
+                        min="1"
+                        max="21"
                         value={dueDateBuffer}
                         onChange={(e) => updateDueDateBuffer(parseInt(e.target.value))}
-                        className="bg-sunny-dark border border-gray-700 rounded px-2 py-1 text-sm"
-                      >
-                        <option value={3}>3 days before</option>
-                        <option value={5}>5 days before</option>
-                        <option value={7}>7 days before</option>
-                        <option value={10}>10 days before</option>
-                        <option value={14}>14 days before</option>
-                      </select>
+                        className="w-24 accent-sunny-yellow"
+                      />
+                      <span className="text-sm font-medium text-sunny-yellow w-20">
+                        {dueDateBuffer} day{dueDateBuffer !== 1 ? 's' : ''} before
+                      </span>
                     </div>
                   </div>
 
-                  {/* Selected channel/publisher badge */}
-                  <div className="mb-4 flex gap-2">
-                    <span className="text-xs px-2 py-1 bg-blue-900 text-blue-300 rounded-full">
-                      {importChannel.toUpperCase()}
-                    </span>
-                    <span className="text-xs px-2 py-1 bg-gray-700 rounded-full">
-                      {importPublisher}
-                    </span>
-                  </div>
-
                   {/* Placements List */}
-                  <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                  <div className="space-y-2 max-h-[350px] overflow-y-auto">
                     {parsedPlacements.map((p) => (
                       <div
                         key={p._importId}
@@ -754,39 +784,57 @@ export default function NewBrief() {
                       </div>
                     ))}
                   </div>
-
-                  {/* Upload another */}
-                  <button
-                    onClick={() => {
-                      setParsedPlacements([]);
-                      setSelectedImports(new Set());
-                    }}
-                    className="mt-4 text-sm text-gray-400 hover:text-white"
-                  >
-                    ← Upload different file
-                  </button>
                 </div>
               )}
             </div>
 
             {/* Modal Footer */}
             {parsedPlacements.length > 0 && (
-              <div className="px-6 py-4 border-t border-gray-700 flex items-center justify-end gap-3">
+              <div className="px-6 py-4 border-t border-gray-700 flex items-center justify-between">
                 <button
                   onClick={() => {
-                    setShowImportModal(false);
                     setParsedPlacements([]);
+                    setSelectedImports(new Set());
                   }}
-                  className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+                  className="text-sm text-gray-400 hover:text-white"
                 >
-                  Cancel
+                  ← Upload different file
                 </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      addSelectedToCart();
+                    }}
+                    disabled={selectedImports.size === 0 || !importPublisher}
+                    className="px-4 py-2 border border-sunny-yellow text-sunny-yellow rounded-lg hover:bg-sunny-yellow/10 transition-colors disabled:opacity-50 disabled:border-gray-600 disabled:text-gray-500"
+                  >
+                    Add & Upload More
+                  </button>
+                  <button
+                    onClick={() => {
+                      addSelectedToCart();
+                      setTimeout(() => closeImportModal(), 100);
+                    }}
+                    disabled={selectedImports.size === 0 || !importPublisher}
+                    className="bg-sunny-yellow text-black font-semibold px-6 py-2 rounded-lg hover:bg-yellow-400 transition-colors disabled:opacity-50 disabled:bg-gray-600"
+                  >
+                    Add {selectedImports.size} & Done
+                  </button>
+                </div>
+              </div>
+            )}
+            
+            {/* Show cart count in modal when items added */}
+            {parsedPlacements.length === 0 && cart.length > 0 && (
+              <div className="px-6 py-3 border-t border-gray-700 flex items-center justify-between bg-sunny-dark/50">
+                <span className="text-sm text-gray-400">
+                  {cart.length} item{cart.length !== 1 ? 's' : ''} in brief
+                </span>
                 <button
-                  onClick={addSelectedToCart}
-                  disabled={selectedImports.size === 0}
-                  className="bg-sunny-yellow text-black font-semibold px-6 py-2 rounded-lg hover:bg-yellow-400 transition-colors disabled:opacity-50"
+                  onClick={closeImportModal}
+                  className="text-sunny-yellow hover:underline text-sm"
                 >
-                  Add {selectedImports.size} to Brief
+                  Done importing
                 </button>
               </div>
             )}
