@@ -50,6 +50,7 @@ export async function POST(request) {
       campaignName,
       items: items || [],
       groups, // Channel → Specs hierarchy
+      dueDateBuffer: 5, // Default: due 5 days before flight start
       createdAt: now,
       updatedAt: now,
     };
