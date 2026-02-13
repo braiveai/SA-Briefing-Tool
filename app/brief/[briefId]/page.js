@@ -182,14 +182,15 @@ function DueBarChart({ specs, onWeekClick, selectedWeek }) {
       <div className="flex items-end gap-2 h-32">
         {weekData.map(({ weekKey, pending, uploaded, overdue }) => {
           const total = pending + uploaded;
-          const heightPercent = (total / maxCount) * 100;
+          const maxBarPx = 100;
+          const barHeight = total > 0 ? Math.max(Math.round((total / maxCount) * maxBarPx), 16) : 0;
           const isSelected = selectedWeek === weekKey;
           const weekDate = new Date(weekKey);
           const label = `${weekDate.getDate()} ${weekDate.toLocaleDateString('en-AU', { month: 'short' })}`;
           return (
-            <div key={weekKey} className="flex-1 flex flex-col items-center">
+            <div key={weekKey} className="flex-1 flex flex-col items-center justify-end">
               <div className={`w-full relative cursor-pointer transition-all ${isSelected ? 'opacity-100' : 'opacity-70 hover:opacity-100'}`}
-                style={{ height: `${heightPercent}%`, minHeight: total > 0 ? '20px' : '0' }} onClick={() => onWeekClick(isSelected ? null : weekKey)}>
+                style={{ height: `${barHeight}px` }} onClick={() => onWeekClick(isSelected ? null : weekKey)}>
                 {uploaded > 0 && <div className="absolute bottom-0 w-full bg-green-500 rounded-t" style={{ height: `${(uploaded / total) * 100}%` }} />}
                 {pending > 0 && <div className={`absolute w-full rounded-t ${overdue ? 'bg-red-500' : 'bg-sunny-yellow'}`}
                   style={{ height: `${(pending / total) * 100}%`, bottom: `${(uploaded / total) * 100}%` }} />}
