@@ -140,6 +140,14 @@ export async function PATCH(request, { params }) {
       }
     }
 
+    // Handle removing multiple placements at once (e.g. deleting a whole spec card)
+    if (updates.removePlacementIds && Array.isArray(updates.removePlacementIds)) {
+      if (brief.items) {
+        const idsToRemove = new Set(updates.removePlacementIds);
+        brief.items = brief.items.filter(item => !idsToRemove.has(item.id));
+      }
+    }
+
     // Handle basic field updates
     if (updates.clientName) brief.clientName = updates.clientName;
     if (updates.campaignName) brief.campaignName = updates.campaignName;
