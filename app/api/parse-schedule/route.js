@@ -70,11 +70,22 @@ export async function POST(request) {
 }
 
 // ============================================
-// EXCEL EXTRACTION - Enhanced to identify spec headers
+// EXCEL EXTRACTION - Enhanced to identify spec headers AND floating text boxes
 // ============================================
 function extractExcel(buffer) {
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const lines = [];
+  
+  // FIRST: Try to extract text from floating text boxes/shapes (drawings)
+  const drawingText = extractDrawingText(buffer);
+  if (drawingText.length > 0) {
+    lines.push('--- PUBLISHER REQUIREMENTS (from document header/text box) ---');
+    drawingText.forEach(text => {
+      lines.push(`[PUBLISHER SPECS] ${text}`);
+    });
+    lines.push('--- END PUBLISHER REQUIREMENTS ---');
+    lines.push('');
+  }
   
   // Keywords that indicate publisher spec info (not placement data)
   const specKeywords = [
@@ -124,8 +135,8 @@ function extractExcel(buffer) {
       }
     }
     
-    // Output header section first (tagged)
-    if (headerSection.length > 0) {
+    // Output header section first (tagged) - only if we didn't already get drawing text
+    if (headerSection.length > 0 && drawingText.length === 0) {
       lines.push('--- PUBLISHER REQUIREMENTS (extract these as publisherSpecs) ---');
       lines.push(...headerSection);
       lines.push('--- END PUBLISHER REQUIREMENTS ---');
@@ -136,6 +147,68 @@ function extractExcel(buffer) {
   }
 
   return lines.join('\n');
+}
+
+// ============================================
+// EXTRACT TEXT FROM EXCEL DRAWINGS (text boxes, shapes)
+// Uses XLSX's built-in zip reading - no extra dependencies
+// ============================================
+function extractDrawingText(buffer) {
+  const texts = [];
+  
+  try {
+    // XLSX can read the raw zip contents with bookFiles option
+    const workbook = XLSX.read(buffer, { type: 'buffer', bookFiles: true });
+    
+    // Access the underlying files in the xlsx archive
+    const files = workbook.files || {};
+    
+    // Look for drawing XML files
+    for (const filename of Object.keys(files)) {
+      if (filename.includes('drawings/') && filename.endsWith('.xml')) {
+        // Get the file content
+        const file = files[filename];
+        let content = '';
+        
+        if (file.asText) {
+          content = file.asText();
+        } else if (file._data && file._data.getContent) {
+          content = file._data.getContent().toString('utf8');
+        } else if (typeof file === 'string') {
+          content = file;
+        } else if (Buffer.isBuffer(file)) {
+          content = file.toString('utf8');
+        }
+        
+        if (content) {
+          // Extract text from DrawingML <a:t> tags
+          const textMatches = content.match(/<a:t>([^<]+)<\/a:t>/g);
+          if (textMatches) {
+            const allText = textMatches
+              .map(match => match.replace(/<\/?a:t>/g, '').trim())
+              .filter(t => t)
+              .join(' ');
+            
+            // Only include if it looks like spec info
+            const lower = allText.toLowerCase();
+            if (lower.includes('important') || lower.includes('dpi') || 
+                lower.includes('artwork') || lower.includes('file') ||
+                lower.includes('working days') || lower.includes('bitrate') ||
+                lower.includes('@') || lower.includes('deadline') ||
+                lower.includes('specification') || lower.includes('format') ||
+                lower.includes('pixel')) {
+              texts.push(allText);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    // If parsing fails, continue without drawing text - cell extraction still works
+    console.log('Drawing extraction skipped:', err.message);
+  }
+  
+  return texts;
 }
 
 // ============================================
