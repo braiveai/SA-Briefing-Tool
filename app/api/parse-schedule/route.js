@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import * as XLSX from 'xlsx';
-import AdmZip from 'adm-zip';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const AdmZip = require('adm-zip');
 
 export async function POST(request) {
   const debug = { steps: [] };
@@ -53,12 +55,14 @@ export async function POST(request) {
     }
 
     debug.steps.push(`Result: ${result.placements.length} placements, ${result.detectedChannel}/${result.detectedPublisher}`);
+    debug.steps.push(`PublisherSpecs: ${JSON.stringify(result.publisherSpecs)}`);
 
     return NextResponse.json({
       success: true,
       detectedChannel: result.detectedChannel,
       detectedPublisher: result.detectedPublisher,
       placements: result.placements,
+      publisherSpecs: result.publisherSpecs,
       validation: validation,
       debug
     });
@@ -79,7 +83,9 @@ function extractExcel(buffer) {
   
   // FIRST: Try to extract text from floating text boxes/shapes (drawings)
   const drawingText = extractDrawingText(buffer);
+  console.log(`[PARSE] Drawing text extraction: found ${drawingText.length} text blocks`);
   if (drawingText.length > 0) {
+    console.log(`[PARSE] Drawing text preview: ${drawingText[0].substring(0, 200)}...`);
     lines.push('--- PUBLISHER REQUIREMENTS (from document header/text box) ---');
     drawingText.forEach(text => {
       lines.push(`[PUBLISHER SPECS] ${text}`);
@@ -560,6 +566,7 @@ function normalize(parsed, debug) {
   
   // Extract and normalize publisher specs
   const publisherSpecs = parsed.publisherSpecs || {};
+  console.log(`[PARSE] AI returned publisherSpecs:`, JSON.stringify(publisherSpecs));
   
   return {
     placements: normalized,
