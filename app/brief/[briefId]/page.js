@@ -212,9 +212,10 @@ function DueBarChart({ specs, onWeekClick, selectedWeek }) {
 // ============================================
 // SPEC CARD WITH EDIT MODE
 // ============================================
-function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlacementEdit, attachments }) {
+function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlacementEdit, onDeletePlacement, onDeleteCard, attachments }) {
   const [editingPlacement, setEditingPlacement] = useState(null);
   const [editValues, setEditValues] = useState({});
+  const [confirmDeleteCard, setConfirmDeleteCard] = useState(false);
   const daysUntil = spec.earliestDue ? getDaysUntil(spec.earliestDue) : null;
   
   let urgencyClass = '', urgencyGlow = '';
@@ -406,6 +407,8 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlace
                         {p.dueDate && <div className="text-xs text-white/50 mr-2">Due: {formatDateFull(p.dueDate)}</div>}
                         <button onClick={(e) => { e.stopPropagation(); startEdit(p); }}
                           className="text-xs text-white/30 hover:text-sunny-yellow p-1 rounded hover:bg-white/10 flex-shrink-0">✎</button>
+                        <button onClick={(e) => { e.stopPropagation(); onDeletePlacement(p.id); }}
+                          className="text-xs text-white/30 hover:text-red-400 p-1 rounded hover:bg-white/10 flex-shrink-0">✕</button>
                         <button className="text-xs text-white/40 hover:text-sunny-yellow px-2 py-1 rounded hover:bg-white/10 flex-shrink-0">Upload ↗</button>
                       </div>
                     )}
@@ -413,6 +416,25 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlace
                 );
               })}
             </div>
+          </div>
+
+          {/* Delete Card */}
+          <div className="border-t border-white/5 p-3">
+            {confirmDeleteCard ? (
+              <div className="flex items-center justify-between bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-2">
+                <span className="text-sm text-red-400">Delete this entire card and all {spec.placements.length} placements?</span>
+                <div className="flex gap-2">
+                  <button onClick={() => setConfirmDeleteCard(false)} className="px-3 py-1 text-xs text-white/50 hover:text-white rounded hover:bg-white/10">Cancel</button>
+                  <button onClick={() => { onDeleteCard(spec.placements.map(p => p.id)); setConfirmDeleteCard(false); }}
+                    className="px-3 py-1 text-xs bg-red-500 text-white rounded font-medium hover:bg-red-400">Delete All</button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={() => setConfirmDeleteCard(true)}
+                className="text-xs text-white/20 hover:text-red-400 transition-colors">
+                Delete card
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -975,6 +997,35 @@ export default function BriefPage() {
     } catch (err) { console.error('Failed to add placements:', err); }
   }
 
+  async function handleDeletePlacement(placementId) {
+    setBrief(prev => {
+      if (!prev) return prev;
+      return { ...prev, items: prev.items.filter(item => item.id !== placementId) };
+    });
+    try {
+      await fetch(`/api/brief/${briefId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ removePlacementId: placementId }),
+      });
+    } catch (err) { console.error('Failed to delete placement:', err); }
+  }
+
+  async function handleDeleteSpecCard(placementIds) {
+    setBrief(prev => {
+      if (!prev) return prev;
+      const idsToRemove = new Set(placementIds);
+      return { ...prev, items: prev.items.filter(item => !idsToRemove.has(item.id)) };
+    });
+    try {
+      await fetch(`/api/brief/${briefId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ removePlacementIds: placementIds }),
+      });
+    } catch (err) { console.error('Failed to delete spec card:', err); }
+  }
+
   async function handleAddReference(doc) {
     setBrief(prev => {
       if (!prev) return prev;
@@ -1112,7 +1163,8 @@ export default function BriefPage() {
                   {specs.map(spec => (
                     <SpecCard key={spec.id} spec={spec} channel={channelKey} onStatusChange={handleStatusChange}
                       onExpand={toggleSpecExpanded} isExpanded={expandedSpecs.has(spec.id)}
-                      onPlacementEdit={handlePlacementEdit} attachments={brief.attachments} />
+                      onPlacementEdit={handlePlacementEdit} onDeletePlacement={handleDeletePlacement}
+                      onDeleteCard={handleDeleteSpecCard} attachments={brief.attachments} />
                   ))}
                 </div>
               </div>
