@@ -70,11 +70,19 @@ export async function POST(request) {
 }
 
 // ============================================
-// EXCEL EXTRACTION
+// EXCEL EXTRACTION - Enhanced to identify spec headers
 // ============================================
 function extractExcel(buffer) {
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const lines = [];
+  
+  // Keywords that indicate publisher spec info (not placement data)
+  const specKeywords = [
+    'important', 'specification', 'requirement', 'artwork', 'dpi', 'bitrate',
+    'file size', 'max size', 'working days', 'lead time', 'deadline',
+    'jpeg', 'png', 'mp4', 'video', 'audio', 'format', 'resolution',
+    'delivery', 'submit', 'contact', '@', '.com'
+  ];
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
@@ -82,12 +90,49 @@ function extractExcel(buffer) {
     
     lines.push(`=== Sheet: ${sheetName} ===`);
     
+    // First pass: identify header rows vs data rows
+    let headerSection = [];
+    let dataSection = [];
+    let foundTable = false;
+    
     for (const row of data) {
       const cells = row.map(c => c == null ? '' : String(c).trim()).filter(c => c);
-      if (cells.length > 0) {
-        lines.push(cells.join(' | '));
+      if (cells.length === 0) continue;
+      
+      const rowText = cells.join(' ').toLowerCase();
+      
+      // Check if this looks like a table header (has multiple column-like entries)
+      const hasDateColumns = rowText.includes('date') || rowText.includes('start') || rowText.includes('end');
+      const hasDimensionColumns = rowText.includes('width') || rowText.includes('height') || rowText.includes('pixel');
+      
+      if ((hasDateColumns && hasDimensionColumns) || rowText.includes('postcode') || rowText.includes('booking')) {
+        foundTable = true;
+      }
+      
+      // Check if row contains spec keywords
+      const hasSpecKeywords = specKeywords.some(kw => rowText.includes(kw));
+      
+      if (!foundTable && hasSpecKeywords) {
+        headerSection.push(`[PUBLISHER SPECS] ${cells.join(' | ')}`);
+      } else if (foundTable || cells.length >= 3) {
+        dataSection.push(cells.join(' | '));
+      } else if (hasSpecKeywords) {
+        // Spec info found after table started
+        headerSection.push(`[PUBLISHER SPECS] ${cells.join(' | ')}`);
+      } else {
+        dataSection.push(cells.join(' | '));
       }
     }
+    
+    // Output header section first (tagged)
+    if (headerSection.length > 0) {
+      lines.push('--- PUBLISHER REQUIREMENTS (extract these as publisherSpecs) ---');
+      lines.push(...headerSection);
+      lines.push('--- END PUBLISHER REQUIREMENTS ---');
+    }
+    
+    // Then data section
+    lines.push(...dataSection);
   }
 
   return lines.join('\n');
@@ -115,12 +160,14 @@ Return this exact structure:
 }
 
 PUBLISHER SPECS - CRITICAL:
-- Look for "IMPORTANT INFO", "Specifications", "Requirements", "Artwork Guidelines" sections
+- Look for sections tagged [PUBLISHER SPECS] - these contain document-level requirements
+- Also look for "IMPORTANT INFO", "Specifications", "Requirements", "Artwork Guidelines" sections
 - These are usually in headers, footers, or highlighted sections (often pink/colored)
 - Extract ALL technical requirements: file format, size limits, DPI, video specs, lead times
 - This is document-level info that applies to ALL placements
 - If a spec mentions "5 working days" or similar, capture it in leadTime
 - If video specs mention bitrate, codec, audio - capture in videoSpecs
+- If there's an email address for submissions, capture in deliveryEmail
 
 CRITICAL RULES FOR SITE NAMES:
 - siteName MUST be the actual location/panel name from the document
@@ -239,7 +286,12 @@ async function parsePDFWithVision(openai, buffer, debug) {
               file_data: `data:application/pdf;base64,${base64}`,
             },
           },
-          { type: 'text', text: 'Extract all placements. siteName must be actual location names, never generic terms. Return ONLY valid JSON.' },
+          { type: 'text', text: `Extract all placements from this media schedule.
+
+IMPORTANT: 
+1. Look for colored/highlighted boxes (often pink, yellow, or bordered) containing artwork specifications, file requirements, deadlines, and delivery info. Extract these as publisherSpecs.
+2. siteName must be actual location names (streets, venues, intersections) - never generic terms like "Billboard".
+3. Return ONLY valid JSON.` },
         ],
       },
     ],
