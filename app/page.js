@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { CHANNELS, STATES, SPECS, getPublishers, getPlacements } from '@/lib/specs';
 
@@ -69,6 +69,35 @@ export default function NewBrief() {
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [showNewBrief, setShowNewBrief] = useState(false);
+  
+  // Dashboard state
+  const [existingBriefs, setExistingBriefs] = useState([]);
+  const [loadingBriefs, setLoadingBriefs] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Load existing briefs
+  useEffect(() => {
+    async function loadBriefs() {
+      try {
+        const res = await fetch('/api/briefs');
+        const data = await res.json();
+        setExistingBriefs(data.briefs || []);
+      } catch (err) { console.error('Failed to load briefs:', err); }
+      setLoadingBriefs(false);
+    }
+    loadBriefs();
+  }, []);
+
+  // Filter briefs by search
+  const filteredBriefs = useMemo(() => {
+    if (!searchQuery.trim()) return existingBriefs;
+    const q = searchQuery.toLowerCase();
+    return existingBriefs.filter(b => 
+      b.clientName?.toLowerCase().includes(q) || 
+      b.campaignName?.toLowerCase().includes(q)
+    );
+  }, [existingBriefs, searchQuery]);
   
   // Brief details
   const [clientName, setClientName] = useState('');
@@ -395,17 +424,138 @@ export default function NewBrief() {
   // ============================================
   // RENDER
   // ============================================
+  
+  // DASHBOARD VIEW
+  if (!showNewBrief) {
+    return (
+      <div className="min-h-screen bg-sunny-dark">
+        <header className="border-b border-gray-800 bg-sunny-gray sticky top-0 z-50">
+          <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <img src="/sunny-logo-white.png" alt="Sunny" className="h-6" />
+              <div className="border-l border-white/20 pl-4">
+                <h1 className="text-xl font-semibold">Creative Briefs</h1>
+              </div>
+            </div>
+            <button onClick={() => setShowNewBrief(true)}
+              className="bg-sunny-yellow text-black font-semibold px-5 py-2.5 rounded-lg hover:bg-yellow-400">
+              + New Brief
+            </button>
+          </div>
+        </header>
+
+        <div className="max-w-6xl mx-auto px-6 py-8">
+          {/* Search */}
+          <div className="mb-6">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search briefs by client or campaign..."
+              className="w-full bg-sunny-gray border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-sunny-yellow"
+            />
+          </div>
+
+          {/* Briefs List */}
+          {loadingBriefs ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="animate-spin w-8 h-8 border-2 border-sunny-yellow border-t-transparent rounded-full" />
+            </div>
+          ) : filteredBriefs.length === 0 ? (
+            <div className="text-center py-20">
+              <div className="text-5xl mb-4">{searchQuery ? '🔍' : '📋'}</div>
+              <p className="text-white/50 text-lg mb-4">{searchQuery ? 'No briefs match your search.' : 'No briefs created yet.'}</p>
+              {!searchQuery && (
+                <button onClick={() => setShowNewBrief(true)}
+                  className="bg-sunny-yellow text-black font-semibold px-6 py-3 rounded-lg hover:bg-yellow-400">
+                  Create your first brief
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredBriefs.map(brief => {
+                const itemCount = brief.items?.length || 0;
+                const channelSet = new Set(brief.items?.map(i => i.channel) || []);
+                const specSet = new Set();
+                brief.items?.forEach(i => {
+                  const key = (i.channel === 'radio' || i.channel === 'tv')
+                    ? (i.specs?.adLength || i.specs?.spotLength || 'unknown')
+                    : (i.specs?.dimensions || 'unknown');
+                  specSet.add(`${i.channel}-${key}`);
+                });
+                const creativeCount = specSet.size;
+
+                // Find earliest due date
+                let earliestDue = null;
+                brief.items?.forEach(i => {
+                  const due = i.dueDate || (i.flightStart ? (() => {
+                    const d = new Date(i.flightStart);
+                    d.setDate(d.getDate() - (brief.dueDateBuffer || 5));
+                    return d.toISOString().split('T')[0];
+                  })() : null);
+                  if (due && (!earliestDue || due < earliestDue)) earliestDue = due;
+                });
+
+                const daysUntil = earliestDue ? Math.ceil((new Date(earliestDue) - new Date()) / (1000 * 60 * 60 * 24)) : null;
+                let urgencyBorder = 'border-white/10';
+                if (daysUntil !== null && daysUntil < 0) urgencyBorder = 'border-red-500/40';
+                else if (daysUntil !== null && daysUntil <= 7) urgencyBorder = 'border-amber-500/30';
+
+                return (
+                  <div key={brief.id}
+                    onClick={() => router.push(`/brief/${brief.id}`)}
+                    className={`bg-white/5 border ${urgencyBorder} rounded-xl p-5 hover:bg-white/[0.07] cursor-pointer transition-all group`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-3">
+                          <h3 className="text-lg font-semibold truncate">{brief.clientName}</h3>
+                          <div className="flex gap-1">
+                            {Array.from(channelSet).map(ch => {
+                              const icons = { ooh: '📍', tv: '📺', radio: '📻', digital: '💻' };
+                              return <span key={ch} className="text-sm" title={ch}>{icons[ch] || '📄'}</span>;
+                            })}
+                          </div>
+                        </div>
+                        <p className="text-sm text-white/50 mt-0.5">{brief.campaignName}</p>
+                        <div className="flex items-center gap-4 mt-2 text-xs text-white/40">
+                          <span>{creativeCount} creative{creativeCount !== 1 ? 's' : ''}</span>
+                          <span>{itemCount} placement{itemCount !== 1 ? 's' : ''}</span>
+                          {brief.createdAt && <span>Created {new Date(brief.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}</span>}
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0 ml-4">
+                        {daysUntil !== null && (
+                          <div className={`text-sm font-medium ${daysUntil < 0 ? 'text-red-400' : daysUntil <= 3 ? 'text-red-400' : daysUntil <= 7 ? 'text-amber-400' : 'text-white/50'}`}>
+                            {daysUntil < 0 ? 'Overdue' : daysUntil === 0 ? 'Due today' : `${daysUntil}d until next due`}
+                          </div>
+                        )}
+                        <span className="text-white/20 group-hover:text-white/50 transition-colors text-lg">→</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // NEW BRIEF CREATION VIEW (existing flow)
   return (
     <div className="min-h-screen bg-sunny-dark">
       {/* Header */}
       <header className="border-b border-gray-800 bg-sunny-gray sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <img src="/sunny-logo-white.png" alt="Sunny" className="h-6" />
-            <div className="border-l border-white/20 pl-4">
-              <h1 className="text-xl font-semibold">New Creative Brief</h1>
+              <button onClick={() => setShowNewBrief(false)} className="text-white/50 hover:text-white text-lg">←</button>
+              <img src="/sunny-logo-white.png" alt="Sunny" className="h-6" />
+              <div className="border-l border-white/20 pl-4">
+                <h1 className="text-xl font-semibold">New Creative Brief</h1>
+              </div>
             </div>
-          </div>
           <div className="flex items-center gap-3">
             <span className="text-gray-400">{totalCreatives} creative{totalCreatives !== 1 ? 's' : ''}</span>
             <button
