@@ -202,6 +202,29 @@ export default function NewBrief() {
     }));
   }
 
+  function updateSpecGroupChannel(oldChannel, specKey, newChannel, newPublisher) {
+    setCart(cart.map(item => {
+      const itemSpec = (item.channel === 'radio' || item.channel === 'tv')
+        ? (item.specs?.adLength || item.specs?.spotLength || 'unknown')
+        : (item.specs?.dimensions || 'unknown');
+      if (item.channel === oldChannel && itemSpec === specKey) {
+        return {
+          ...item,
+          channel: newChannel,
+          channelName: CHANNEL_CONFIG[newChannel]?.name,
+          publisher: newPublisher?.toLowerCase().replace(/\s+/g, '-') || item.publisher,
+          publisherName: newPublisher || item.publisherName,
+        };
+      }
+      return item;
+    }));
+  }
+
+  // State for editing cart items
+  const [editingSpec, setEditingSpec] = useState(null); // { channel, specKey }
+  const [editChannel, setEditChannel] = useState('ooh');
+  const [editPublisher, setEditPublisher] = useState('');
+
   // ============================================
   // IMPORT FUNCTIONS
   // ============================================
@@ -619,34 +642,95 @@ export default function NewBrief() {
                             
                             {/* Spec cards */}
                             <div className="space-y-2 ml-8">
-                              {specs.map(([specKey, spec]) => (
-                                <div
-                                  key={specKey}
-                                  className="bg-white/5 border border-white/10 rounded-lg p-3 group"
-                                >
-                                  <div className="flex items-center gap-3">
-                                    <MiniDimensionPreview dimensions={spec.label} channel={channelKey} />
-                                    <div className="flex-1 min-w-0">
-                                      <div className="text-sm font-medium truncate">{spec.label}</div>
-                                      <div className="text-xs text-white/40">
-                                        {spec.placements.length} placement{spec.placements.length !== 1 ? 's' : ''}
-                                        {spec.publisher && ` • ${spec.publisher}`}
-                                      </div>
-                                      {spec.minStart && (
-                                        <div className="text-xs text-white/30 mt-0.5">
-                                          {formatDate(spec.minStart)} → {formatDate(spec.maxEnd)}
+                              {specs.map(([specKey, spec]) => {
+                                const isEditing = editingSpec?.channel === channelKey && editingSpec?.specKey === specKey;
+                                
+                                return (
+                                  <div
+                                    key={specKey}
+                                    className="bg-white/5 border border-white/10 rounded-lg p-3 group"
+                                  >
+                                    {isEditing ? (
+                                      // Edit mode
+                                      <div className="space-y-3">
+                                        <div className="text-sm font-medium">{spec.label}</div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                          <select
+                                            value={editChannel}
+                                            onChange={(e) => setEditChannel(e.target.value)}
+                                            className="bg-sunny-dark border border-white/20 rounded px-2 py-1 text-sm"
+                                          >
+                                            <option value="ooh">Out of Home</option>
+                                            <option value="tv">Television</option>
+                                            <option value="radio">Radio</option>
+                                            <option value="digital">Digital</option>
+                                          </select>
+                                          <select
+                                            value={editPublisher}
+                                            onChange={(e) => setEditPublisher(e.target.value)}
+                                            className="bg-sunny-dark border border-white/20 rounded px-2 py-1 text-sm"
+                                          >
+                                            <option value="">Select publisher</option>
+                                            {IMPORT_PUBLISHERS[editChannel]?.map(p => (
+                                              <option key={p} value={p}>{p}</option>
+                                            ))}
+                                          </select>
                                         </div>
-                                      )}
-                                    </div>
-                                    <button
-                                      onClick={() => removeSpecGroup(channelKey, specKey)}
-                                      className="text-white/20 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
-                                    >
-                                      ✕
-                                    </button>
+                                        <div className="flex gap-2 justify-end">
+                                          <button
+                                            onClick={() => setEditingSpec(null)}
+                                            className="px-2 py-1 text-xs text-white/50 hover:text-white"
+                                          >
+                                            Cancel
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              updateSpecGroupChannel(channelKey, specKey, editChannel, editPublisher);
+                                              setEditingSpec(null);
+                                            }}
+                                            className="px-2 py-1 text-xs bg-sunny-yellow text-black rounded font-medium"
+                                          >
+                                            Save
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      // View mode
+                                      <div className="flex items-center gap-3">
+                                        <MiniDimensionPreview dimensions={spec.label} channel={channelKey} />
+                                        <div className="flex-1 min-w-0">
+                                          <div className="text-sm font-medium truncate">{spec.label}</div>
+                                          <div className="text-xs text-white/40">
+                                            {spec.placements.length} placement{spec.placements.length !== 1 ? 's' : ''}
+                                            {spec.publisher && ` • ${spec.publisher}`}
+                                          </div>
+                                          {spec.minStart && (
+                                            <div className="text-xs text-white/30 mt-0.5">
+                                              {formatDate(spec.minStart)} → {formatDate(spec.maxEnd)}
+                                            </div>
+                                          )}
+                                        </div>
+                                        <button
+                                          onClick={() => {
+                                            setEditingSpec({ channel: channelKey, specKey });
+                                            setEditChannel(channelKey);
+                                            setEditPublisher(spec.publisher || '');
+                                          }}
+                                          className="text-white/20 hover:text-sunny-yellow opacity-0 group-hover:opacity-100 transition-all text-xs"
+                                        >
+                                          ✎
+                                        </button>
+                                        <button
+                                          onClick={() => removeSpecGroup(channelKey, specKey)}
+                                          className="text-white/20 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           </div>
                         );
