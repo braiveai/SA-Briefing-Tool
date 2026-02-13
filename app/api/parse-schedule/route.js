@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import * as XLSX from 'xlsx';
+import AdmZip from 'adm-zip';
 
 export async function POST(request) {
   const debug = { steps: [] };
@@ -151,52 +152,48 @@ function extractExcel(buffer) {
 
 // ============================================
 // EXTRACT TEXT FROM EXCEL DRAWINGS (text boxes, shapes)
-// Uses XLSX's built-in zip reading - no extra dependencies
+// Uses adm-zip to read the xlsx as a zip archive and extract DrawingML text
 // ============================================
 function extractDrawingText(buffer) {
   const texts = [];
   
   try {
-    // XLSX can read the raw zip contents with bookFiles option
-    const workbook = XLSX.read(buffer, { type: 'buffer', bookFiles: true });
+    const zip = new AdmZip(buffer);
+    const entries = zip.getEntries();
     
-    // Access the underlying files in the xlsx archive
-    const files = workbook.files || {};
-    
-    // Look for drawing XML files
-    for (const filename of Object.keys(files)) {
-      if (filename.includes('drawings/') && filename.endsWith('.xml')) {
-        // Get the file content
-        const file = files[filename];
-        let content = '';
-        
-        if (file.asText) {
-          content = file.asText();
-        } else if (file._data && file._data.getContent) {
-          content = file._data.getContent().toString('utf8');
-        } else if (typeof file === 'string') {
-          content = file;
-        } else if (Buffer.isBuffer(file)) {
-          content = file.toString('utf8');
-        }
+    for (const entry of entries) {
+      const name = entry.entryName;
+      // Look for drawing XML files AND vmlDrawing files (text boxes can be in either)
+      if ((name.includes('drawings/') || name.includes('vmlDrawing')) && (name.endsWith('.xml') || name.endsWith('.vml'))) {
+        const content = entry.getData().toString('utf8');
         
         if (content) {
-          // Extract text from DrawingML <a:t> tags
-          const textMatches = content.match(/<a:t>([^<]+)<\/a:t>/g);
-          if (textMatches) {
-            const allText = textMatches
+          // Extract text from DrawingML <a:t> tags (standard drawings)
+          const drawingMatches = content.match(/<a:t>([^<]+)<\/a:t>/g);
+          // Also extract from VML <t> tags inside text boxes
+          const vmlMatches = content.match(/<v:textbox[^>]*>[\s\S]*?<\/v:textbox>/gi);
+          
+          let allTextParts = [];
+          
+          if (drawingMatches) {
+            allTextParts = drawingMatches
               .map(match => match.replace(/<\/?a:t>/g, '').trim())
-              .filter(t => t)
-              .join(' ');
-            
-            // Only include if it looks like spec info
-            const lower = allText.toLowerCase();
-            if (lower.includes('important') || lower.includes('dpi') || 
-                lower.includes('artwork') || lower.includes('file') ||
-                lower.includes('working days') || lower.includes('bitrate') ||
-                lower.includes('@') || lower.includes('deadline') ||
-                lower.includes('specification') || lower.includes('format') ||
-                lower.includes('pixel')) {
+              .filter(t => t);
+          }
+          
+          if (vmlMatches) {
+            for (const vmlBlock of vmlMatches) {
+              // Extract text content from within VML textboxes
+              const innerText = vmlBlock.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+              if (innerText) allTextParts.push(innerText);
+            }
+          }
+          
+          if (allTextParts.length > 0) {
+            const allText = allTextParts.join(' ').trim();
+            // Text boxes in media schedules are almost always spec/requirement info
+            // Don't filter by keywords - let the AI decide what's relevant
+            if (allText.length > 10) {
               texts.push(allText);
             }
           }
