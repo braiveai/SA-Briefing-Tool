@@ -10,6 +10,9 @@ const IMPORT_PUBLISHERS = {
   tv: ['Seven', 'Nine', 'Ten', 'SBS', 'Foxtel', 'Other'],
   radio: ['ARN', 'SCA', 'Nova', 'ACE Radio', 'Grant Broadcasters', 'Other'],
   digital: ['Google', 'Meta', 'TikTok', 'LinkedIn', 'Spotify', 'Other'],
+  press: ['News Corp', 'Nine Publishing', 'Are Media', 'Other'],
+  transit: ['oOh!', 'JCDecaux', 'QMS', 'Other'],
+  programmatic: ['DV360', 'The Trade Desk', 'Verizon Media', 'Other'],
 };
 
 const CHANNEL_CONFIG = {
@@ -17,6 +20,9 @@ const CHANNEL_CONFIG = {
   tv: { icon: '📺', name: 'Television', color: 'from-purple-500 to-purple-600' },
   radio: { icon: '📻', name: 'Radio', color: 'from-amber-500 to-amber-600' },
   digital: { icon: '💻', name: 'Digital', color: 'from-green-500 to-green-600' },
+  press: { icon: '📰', name: 'Press', color: 'from-rose-500 to-rose-600' },
+  transit: { icon: '🚌', name: 'Transit', color: 'from-cyan-500 to-cyan-600' },
+  programmatic: { icon: '🎯', name: 'Programmatic', color: 'from-indigo-500 to-indigo-600' },
 };
 
 // ============================================
@@ -274,12 +280,24 @@ export default function NewBrief() {
         body: formData,
       });
       
+      if (!res.ok) {
+        let errorMsg = 'Failed to parse schedule';
+        try {
+          const errData = await res.json();
+          errorMsg = errData.error || errorMsg;
+        } catch {
+          const text = await res.text().catch(() => '');
+          if (res.status === 504 || text.includes('FUNCTION_INVOCATION_TIMEOUT')) {
+            errorMsg = 'Request timed out — try a smaller file or split into separate uploads.';
+          } else if (text.includes('An error occurred')) {
+            errorMsg = 'Server error — the file may be too large or complex. Try again.';
+          } else if (text) { errorMsg = text.substring(0, 200); }
+        }
+        throw new Error(errorMsg);
+      }
+      
       const data = await res.json();
       console.log('Parse response:', data);
-      
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to parse schedule');
-      }
       
       if (!data.placements || data.placements.length === 0) {
         throw new Error('No placements found in document.');

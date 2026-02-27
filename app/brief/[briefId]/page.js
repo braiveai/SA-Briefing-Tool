@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { DEFAULT_LEAD_TIMES } from '@/lib/specs';
 
 // ============================================
 // CHANNEL CONFIG
@@ -11,6 +12,9 @@ const CHANNELS = {
   tv: { name: 'Television', icon: '📺', gradient: 'from-purple-500 to-purple-600' },
   radio: { name: 'Radio', icon: '📻', gradient: 'from-amber-500 to-amber-600' },
   digital: { name: 'Digital', icon: '💻', gradient: 'from-green-500 to-green-600' },
+  press: { name: 'Press', icon: '📰', gradient: 'from-rose-500 to-rose-600' },
+  transit: { name: 'Transit', icon: '🚌', gradient: 'from-cyan-500 to-cyan-600' },
+  programmatic: { name: 'Programmatic', icon: '🎯', gradient: 'from-indigo-500 to-indigo-600' },
 };
 
 const STATUS_STEPS = [
@@ -26,6 +30,9 @@ const IMPORT_PUBLISHERS = {
   tv: ['Seven', 'Nine', 'Ten', 'SBS', 'Foxtel', 'Other'],
   radio: ['ARN', 'SCA', 'Nova', 'ACE Radio', 'Grant Broadcasters', 'Other'],
   digital: ['Google', 'Meta', 'TikTok', 'LinkedIn', 'Spotify', 'Other'],
+  press: ['News Corp', 'Nine Publishing', 'Are Media', 'Other'],
+  transit: ['oOh!', 'JCDecaux', 'QMS', 'Other'],
+  programmatic: ['DV360', 'The Trade Desk', 'Verizon Media', 'Other'],
 };
 
 // ============================================
@@ -177,7 +184,10 @@ function DueBarChart({ specs, onWeekClick, selectedWeek }) {
     <div className="bg-white/5 border border-white/10 rounded-2xl p-6 mb-8">
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold">Creatives Due</h3>
-        {selectedWeek && <button onClick={() => onWeekClick(null)} className="text-xs text-sunny-yellow hover:underline">Clear filter</button>}
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-white/40">Click a bar to filter by week</span>
+          {selectedWeek && <button onClick={() => onWeekClick(null)} className="text-xs text-sunny-yellow hover:underline">Clear filter</button>}
+        </div>
       </div>
       <div className="flex items-end gap-2 h-32">
         {weekData.map(({ weekKey, pending, uploaded, overdue }) => {
@@ -213,10 +223,14 @@ function DueBarChart({ specs, onWeekClick, selectedWeek }) {
 // ============================================
 // SPEC CARD WITH EDIT MODE
 // ============================================
-function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlacementEdit, onDeletePlacement, onDeleteCard, attachments }) {
+function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlacementEdit, onPlacementDelete, onDeleteCard, attachments, specNote, onSpecNoteChange, briefId }) {
   const [editingPlacement, setEditingPlacement] = useState(null);
   const [editValues, setEditValues] = useState({});
-  const [confirmDeleteCard, setConfirmDeleteCard] = useState(false);
+  const [editingNote, setEditingNote] = useState(false);
+  const [noteText, setNoteText] = useState(specNote || '');
+  const [uploading, setUploading] = useState({});
+  const fileInputRef = useRef(null);
+  const placementFileRefs = useRef({});
   const daysUntil = spec.earliestDue ? getDaysUntil(spec.earliestDue) : null;
   
   let urgencyClass = '', urgencyGlow = '';
@@ -265,6 +279,48 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlace
     setEditingPlacement(null);
     setEditValues({});
   }
+
+  async function handleGroupUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file || !briefId) return;
+    setUploading(prev => ({ ...prev, group: true }));
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('briefId', briefId);
+      formData.append('itemId', spec.placements[0]?.id || spec.id);
+      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.file) {
+        // Update all placements in this group
+        spec.placements.forEach(p => onPlacementEdit(p.id, { uploadedFile: data.file, status: 'received' }));
+      }
+    } catch (err) { console.error('Upload failed:', err); }
+    setUploading(prev => ({ ...prev, group: false }));
+    e.target.value = '';
+  }
+
+  async function handlePlacementUpload(e, placementId) {
+    const file = e.target.files?.[0];
+    if (!file || !briefId) return;
+    setUploading(prev => ({ ...prev, [placementId]: true }));
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('briefId', briefId);
+      formData.append('itemId', placementId);
+      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.file) onPlacementEdit(placementId, { uploadedFile: data.file, status: 'received' });
+    } catch (err) { console.error('Upload failed:', err); }
+    setUploading(prev => ({ ...prev, [placementId]: false }));
+    e.target.value = '';
+  }
+
+  function saveNote() {
+    onSpecNoteChange(spec.id, noteText);
+    setEditingNote(false);
+  }
   
   return (
     <div className={`bg-white/5 rounded-2xl border border-white/10 overflow-hidden transition-all hover:bg-white/[0.07] ${urgencyClass} ${urgencyGlow}`}>
@@ -292,9 +348,21 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlace
           </div>
         </div>
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-white/5">
-          <StatusTrack currentStatus={spec.status || 'briefed'} onChange={onStatusChange} groupId={spec.id} />
-          <span className={`text-white/30 text-sm transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-white/30">Status:</span>
+            <StatusTrack currentStatus={spec.status || 'briefed'} onChange={onStatusChange} groupId={spec.id} />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`text-white/30 text-sm transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
+          </div>
         </div>
+        {/* Delete card - only visible on hover */}
+        {isExpanded && (
+          <div className="px-4 pb-2 flex justify-end">
+            <button onClick={(e) => { e.stopPropagation(); if (confirm('Delete this entire spec card and all its placements?')) onDeleteCard(spec.placements.map(p => p.id)); }}
+              className="text-xs text-white/20 hover:text-red-400">Delete card</button>
+          </div>
+        )}
       </div>
       
       {/* Expanded Content */}
@@ -351,11 +419,39 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlace
           
           {/* Upload Area */}
           <div className="p-4 border-t border-white/5">
-            <div className="border-2 border-dashed border-white/20 rounded-xl p-5 text-center hover:border-sunny-yellow/50 hover:bg-sunny-yellow/5 transition-all cursor-pointer group">
-              <div className="text-xl mb-1 group-hover:scale-110 transition-transform">📁</div>
-              <div className="text-sm text-white/70">Upload creative</div>
-              <div className="text-xs text-white/40 mt-1">for all {spec.placements.length} placements</div>
+            <input type="file" ref={fileInputRef} onChange={handleGroupUpload} className="hidden" />
+            <div onClick={() => fileInputRef.current?.click()}
+              className="border-2 border-dashed border-white/20 rounded-xl p-5 text-center hover:border-sunny-yellow/50 hover:bg-sunny-yellow/5 transition-all cursor-pointer group">
+              {uploading.group ? (
+                <div className="flex items-center justify-center gap-2"><div className="animate-spin w-5 h-5 border-2 border-sunny-yellow border-t-transparent rounded-full" /><span className="text-sm">Uploading...</span></div>
+              ) : spec.placements[0]?.uploadedFile ? (
+                <div><div className="text-green-400 text-sm font-medium">✓ {spec.placements[0].uploadedFile.name}</div><div className="text-xs text-white/40 mt-1">Click to replace</div></div>
+              ) : (
+                <><div className="text-xl mb-1 group-hover:scale-110 transition-transform">📁</div><div className="text-sm text-white/70">Upload creative</div><div className="text-xs text-white/40 mt-1">for all {spec.placements.length} placements</div></>
+              )}
             </div>
+          </div>
+          
+          {/* Notes / Creative Guidance */}
+          <div className="px-4 py-3 border-t border-white/5">
+            {editingNote ? (
+              <div className="space-y-2">
+                <textarea value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="Add creative guidance, e.g. Easter Wild Wonderland script pointers for awareness..."
+                  className="w-full bg-white/5 border border-white/20 rounded-lg px-3 py-2 text-sm text-white resize-none" rows={2} autoFocus />
+                <div className="flex gap-2 justify-end">
+                  <button onClick={() => { setEditingNote(false); setNoteText(specNote || ''); }} className="px-3 py-1 text-xs text-white/50 hover:text-white">Cancel</button>
+                  <button onClick={saveNote} className="px-3 py-1 text-xs bg-sunny-yellow text-black rounded font-medium">Save</button>
+                </div>
+              </div>
+            ) : (
+              <div onClick={() => setEditingNote(true)} className="cursor-pointer hover:bg-white/5 rounded-lg px-2 py-1.5 -mx-2">
+                {specNote ? (
+                  <div className="text-sm text-white/70"><span className="text-xs text-white/40">📝 </span>{specNote}</div>
+                ) : (
+                  <div className="text-xs text-white/30 hover:text-white/50">+ Add creative guidance or notes</div>
+                )}
+              </div>
+            )}
           </div>
           
           {/* Placements List */}
@@ -408,34 +504,18 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlace
                         {p.dueDate && <div className="text-xs text-white/50 mr-2">Due: {formatDateFull(p.dueDate)}</div>}
                         <button onClick={(e) => { e.stopPropagation(); startEdit(p); }}
                           className="text-xs text-white/30 hover:text-sunny-yellow p-1 rounded hover:bg-white/10 flex-shrink-0">✎</button>
-                        <button onClick={(e) => { e.stopPropagation(); onDeletePlacement(p.id); }}
-                          className="text-xs text-white/30 hover:text-red-400 p-1 rounded hover:bg-white/10 flex-shrink-0">✕</button>
-                        <button className="text-xs text-white/40 hover:text-sunny-yellow px-2 py-1 rounded hover:bg-white/10 flex-shrink-0">Upload ↗</button>
+                        <label className="text-xs text-white/40 hover:text-sunny-yellow px-2 py-1 rounded hover:bg-white/10 flex-shrink-0 cursor-pointer">
+                          {uploading[p.id] ? '...' : p.uploadedFile ? '✓' : 'Upload ↗'}
+                          <input type="file" className="hidden" onChange={(e) => handlePlacementUpload(e, p.id)} />
+                        </label>
+                        <button onClick={(e) => { e.stopPropagation(); if (confirm('Delete this placement?')) onPlacementDelete(p.id); }}
+                          className="text-xs text-white/20 hover:text-red-400 p-1 rounded hover:bg-white/10 flex-shrink-0">×</button>
                       </div>
                     )}
                   </div>
                 );
               })}
             </div>
-          </div>
-
-          {/* Delete Card */}
-          <div className="border-t border-white/5 p-3">
-            {confirmDeleteCard ? (
-              <div className="flex items-center justify-between bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-2">
-                <span className="text-sm text-red-400">Delete this entire card and all {spec.placements.length} placements?</span>
-                <div className="flex gap-2">
-                  <button onClick={() => setConfirmDeleteCard(false)} className="px-3 py-1 text-xs text-white/50 hover:text-white rounded hover:bg-white/10">Cancel</button>
-                  <button onClick={() => { onDeleteCard(spec.placements.map(p => p.id)); setConfirmDeleteCard(false); }}
-                    className="px-3 py-1 text-xs bg-red-500 text-white rounded font-medium hover:bg-red-400">Delete All</button>
-                </div>
-              </div>
-            ) : (
-              <button onClick={() => setConfirmDeleteCard(true)}
-                className="text-xs text-white/20 hover:text-red-400 transition-colors">
-                Delete card
-              </button>
-            )}
           </div>
         </div>
       )}
@@ -454,6 +534,7 @@ function AddPlacementModal({ isOpen, onClose, onAddManual, onImport }) {
   const [selectedImports, setSelectedImports] = useState(new Set());
   const [detectedChannel, setDetectedChannel] = useState('ooh');
   const [detectedPublisher, setDetectedPublisher] = useState('');
+  const [importPublisherSpecs, setImportPublisherSpecs] = useState(null);
   
   const [manualForm, setManualForm] = useState({
     channel: 'ooh',
@@ -480,13 +561,20 @@ function AddPlacementModal({ isOpen, onClose, onAddManual, onImport }) {
     
     try {
       const res = await fetch('/api/parse-schedule', { method: 'POST', body: formData });
-      const data = await res.json();
       
-      if (!res.ok) throw new Error(data.error || 'Failed to parse schedule');
+      if (!res.ok) {
+        let errorMsg = 'Failed to parse schedule';
+        try { const errData = await res.json(); errorMsg = errData.error || errorMsg; }
+        catch { const text = await res.text().catch(() => ''); if (text.includes('An error')) errorMsg = 'Server error — try a smaller file.'; else if (text) errorMsg = text.substring(0, 200); }
+        throw new Error(errorMsg);
+      }
+      
+      const data = await res.json();
       if (!data.placements || data.placements.length === 0) throw new Error('No placements found in document.');
       
       setDetectedChannel(data.detectedChannel || 'ooh');
       setDetectedPublisher(data.detectedPublisher || '');
+      setImportPublisherSpecs(data.publisherSpecs || null);
       
       const placementsWithIds = data.placements.map((p, i) => ({ ...p, _importId: p._importId || `import-${Date.now()}-${i}` }));
       setParsedPlacements(placementsWithIds);
@@ -507,7 +595,20 @@ function AddPlacementModal({ isOpen, onClose, onAddManual, onImport }) {
       publisherName: detectedPublisher || 'Unknown',
       placementName: p.siteName,
       location: p.location || p.suburb || null,
-      specs: { dimensions: p.dimensions, spotLength: p.spotLength, panelId: p.panelId, direction: p.direction },
+      specs: {
+        dimensions: p.dimensions,
+        adLength: p.spotLength ? `${p.spotLength} seconds` : null,
+        spotLength: p.spotLength,
+        panelId: p.panelId, direction: p.direction,
+        fileType: p.fileType, slotLength: p.slotLength,
+        fileFormat: importPublisherSpecs?.fileFormat || null,
+        maxFileSize: importPublisherSpecs?.maxFileSize || null,
+        dpi: importPublisherSpecs?.dpi || null,
+        videoSpecs: importPublisherSpecs?.videoSpecs || null,
+        leadTime: importPublisherSpecs?.leadTime || null,
+        deliveryEmail: importPublisherSpecs?.deliveryEmail || null,
+      },
+      notes: importPublisherSpecs?.notes || null,
       flightStart: p.startDate,
       flightEnd: p.endDate,
       status: 'briefed',
@@ -539,6 +640,7 @@ function AddPlacementModal({ isOpen, onClose, onAddManual, onImport }) {
     setMode(null);
     setParsedPlacements([]);
     setSelectedImports(new Set());
+    setImportPublisherSpecs(null);
     setManualForm({ channel: 'ooh', publisher: '', siteName: '', dimensions: '', location: '', state: '', flightStart: '', flightEnd: '' });
     onClose();
   }
@@ -814,9 +916,11 @@ export default function BriefPage() {
   const [expandedSpecs, setExpandedSpecs] = useState(new Set());
   const [copySuccess, setCopySuccess] = useState(false);
   const [dueDateBuffer, setDueDateBuffer] = useState(5);
+  const [publisherLeadTimes, setPublisherLeadTimes] = useState({});
   const [selectedWeek, setSelectedWeek] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showRefModal, setShowRefModal] = useState(false);
+  const [specNotes, setSpecNotes] = useState({});
 
   const briefId = params.briefId || params.id;
 
@@ -828,6 +932,20 @@ export default function BriefPage() {
         const data = await res.json();
         setBrief(data);
         if (data.dueDateBuffer !== undefined) setDueDateBuffer(data.dueDateBuffer);
+        if (data.specNotes) setSpecNotes(data.specNotes);
+        
+        // Auto-populate publisher lead times from defaults if not already set
+        const savedLeadTimes = data.publisherLeadTimes || {};
+        const publishers = new Set();
+        data.items?.forEach(item => { if (item.publisherName) publishers.add(item.publisherName); });
+        const merged = { ...savedLeadTimes };
+        publishers.forEach(pub => {
+          const pubKey = pub.toLowerCase();
+          if (!(pubKey in merged)) {
+            merged[pubKey] = DEFAULT_LEAD_TIMES[pubKey] || DEFAULT_LEAD_TIMES['_default'] || 5;
+          }
+        });
+        setPublisherLeadTimes(merged);
       } catch (err) {
         console.error('Failed to load brief:', err);
       }
@@ -854,19 +972,26 @@ export default function BriefPage() {
     
     brief.items.forEach(item => {
       const channel = item.channel || 'ooh';
+      
+      // Skip bonus placements
+      const nameLC = (item.placementName || '').toLowerCase();
+      if (nameLC.includes('bonus') || nameLC.includes('value add') || nameLC.includes('value-add')) return;
+      
       let specKey, specLabel;
       if (channel === 'radio' || channel === 'tv') {
-        specKey = item.specs?.adLength || item.specs?.spotLength || 'unknown';
-        specLabel = specKey.includes('second') ? specKey : `${specKey} seconds`;
+        const duration = item.specs?.adLength || (item.specs?.spotLength ? `${item.specs.spotLength} seconds` : null) || (item.specs?.slotLength ? `${item.specs.slotLength} seconds` : null);
+        specKey = duration || item.specs?.dimensions || 'duration-tbc';
+        specLabel = specKey === 'duration-tbc' ? 'Duration TBC' : (specKey.includes('second') ? specKey : `${specKey} seconds`);
       } else {
-        specKey = item.specs?.dimensions || 'unknown';
-        specLabel = specKey;
+        specKey = item.specs?.dimensions || 'dimensions-tbc';
+        specLabel = specKey === 'dimensions-tbc' ? 'Dimensions TBC' : specKey;
       }
-      const specId = `${channel}-${specKey}`;
+      const publisherKey = item.publisherName || 'unknown';
+      const specId = `${channel}-${publisherKey}-${specKey}`;
       
       if (!channels[channel]) channels[channel] = { specs: {}, totalPlacements: 0, totalCreatives: 0 };
-      if (!channels[channel].specs[specKey]) {
-        channels[channel].specs[specKey] = {
+      if (!channels[channel].specs[specId]) {
+        channels[channel].specs[specId] = {
           id: specId, key: specKey, label: specLabel, publisher: item.publisherName,
           placements: [], minStart: null, maxEnd: null, earliestDue: null,
           status: storedStatuses[specId] || 'briefed',
@@ -874,8 +999,10 @@ export default function BriefPage() {
         channels[channel].totalCreatives++;
       }
       
-      const spec = channels[channel].specs[specKey];
-      const calculatedDueDate = item.dueDate || calculateDueDate(item.flightStart, dueDateBuffer);
+      const spec = channels[channel].specs[specId];
+      const pubName = (item.publisherName || '').toLowerCase();
+      const leadTime = publisherLeadTimes[pubName] || dueDateBuffer;
+      const calculatedDueDate = item.dueDate || calculateDueDate(item.flightStart, leadTime);
       spec.placements.push({ ...item, dueDate: calculatedDueDate });
       channels[channel].totalPlacements++;
       
@@ -885,7 +1012,7 @@ export default function BriefPage() {
     });
     
     return channels;
-  }, [brief, storedStatuses, dueDateBuffer]);
+  }, [brief, storedStatuses, dueDateBuffer, publisherLeadTimes]);
 
   const allSpecs = useMemo(() => {
     const specs = [];
@@ -965,8 +1092,31 @@ export default function BriefPage() {
     } catch (err) { console.error('Failed to update due date buffer:', err); }
   }
 
+  async function handlePublisherLeadTimeChange(pubKey, days) {
+    const updated = { ...publisherLeadTimes, [pubKey]: days };
+    setPublisherLeadTimes(updated);
+    try {
+      await fetch(`/api/brief/${briefId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publisherLeadTimes: updated }),
+      });
+    } catch (err) { console.error('Failed to update publisher lead time:', err); }
+  }
+
+  async function handleSpecNoteChange(specId, note) {
+    const updated = { ...specNotes, [specId]: note };
+    setSpecNotes(updated);
+    try {
+      await fetch(`/api/brief/${briefId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ specNotes: updated }),
+      });
+    } catch (err) { console.error('Failed to update spec note:', err); }
+  }
+
   async function handlePlacementEdit(placementId, updates) {
-    // Update local state
     setBrief(prev => {
       if (!prev) return prev;
       const newItems = prev.items.map(item => 
@@ -974,7 +1124,6 @@ export default function BriefPage() {
       );
       return { ...prev, items: newItems };
     });
-    // Save to API
     try {
       await fetch(`/api/brief/${briefId}`, {
         method: 'PATCH',
@@ -982,6 +1131,36 @@ export default function BriefPage() {
         body: JSON.stringify({ placementId, placementUpdates: updates }),
       });
     } catch (err) { console.error('Failed to update placement:', err); }
+  }
+
+  async function handlePlacementDelete(placementId) {
+    setBrief(prev => {
+      if (!prev) return prev;
+      return { ...prev, items: prev.items.filter(item => item.id !== placementId) };
+    });
+    try {
+      await fetch(`/api/brief/${briefId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ removePlacementId: placementId }),
+      });
+    } catch (err) { console.error('Failed to delete placement:', err); }
+  }
+
+  async function handleDeleteCard(placementIds) {
+    setBrief(prev => {
+      if (!prev) return prev;
+      return { ...prev, items: prev.items.filter(item => !placementIds.includes(item.id)) };
+    });
+    for (const pid of placementIds) {
+      try {
+        await fetch(`/api/brief/${briefId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ removePlacementId: pid }),
+        });
+      } catch (err) { console.error('Failed to delete placement:', err); }
+    }
   }
 
   async function handleAddPlacements(items) {
@@ -996,35 +1175,6 @@ export default function BriefPage() {
         body: JSON.stringify({ addItems: items }),
       });
     } catch (err) { console.error('Failed to add placements:', err); }
-  }
-
-  async function handleDeletePlacement(placementId) {
-    setBrief(prev => {
-      if (!prev) return prev;
-      return { ...prev, items: prev.items.filter(item => item.id !== placementId) };
-    });
-    try {
-      await fetch(`/api/brief/${briefId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ removePlacementId: placementId }),
-      });
-    } catch (err) { console.error('Failed to delete placement:', err); }
-  }
-
-  async function handleDeleteSpecCard(placementIds) {
-    setBrief(prev => {
-      if (!prev) return prev;
-      const idsToRemove = new Set(placementIds);
-      return { ...prev, items: prev.items.filter(item => !idsToRemove.has(item.id)) };
-    });
-    try {
-      await fetch(`/api/brief/${briefId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ removePlacementIds: placementIds }),
-      });
-    } catch (err) { console.error('Failed to delete spec card:', err); }
   }
 
   async function handleAddReference(doc) {
@@ -1128,19 +1278,44 @@ export default function BriefPage() {
             <div className="text-4xl font-bold text-green-400">{stats.completed}</div>
             <div className="text-sm text-white/60 mt-1">Completed</div>
           </div>
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5 relative group">
             <div className="text-4xl font-bold text-amber-400">{stats.dueSoon}</div>
             <div className="text-sm text-white/60 mt-1">Due Soon</div>
+            <div className="hidden group-hover:block absolute -top-10 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-black rounded-lg text-xs text-white/80 whitespace-nowrap z-10 border border-white/10">Due within the next 7 days</div>
           </div>
         </div>
 
-        {/* Due Date Buffer Slider */}
+        {/* Lead Time Settings */}
         <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-8">
-          <div className="flex items-center gap-4">
-            <label className="text-sm text-white/60 whitespace-nowrap">Creative due dates:</label>
-            <input type="range" min="1" max="21" value={dueDateBuffer} onChange={(e) => handleDueDateBufferChange(parseInt(e.target.value))} className="flex-1 accent-sunny-yellow" />
-            <span className="text-sm font-medium text-sunny-yellow w-32 text-right">{dueDateBuffer} days before flight</span>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">Creative Lead Times</span>
+              <span className="text-xs text-white/40">(days before flight start)</span>
+            </div>
+            <div className="flex items-center gap-4">
+              <label className="text-xs text-white/40">Default:</label>
+              <input type="range" min="1" max="21" value={dueDateBuffer} onChange={(e) => handleDueDateBufferChange(parseInt(e.target.value))} className="accent-sunny-yellow w-24" />
+              <span className="text-xs font-medium text-sunny-yellow w-14 text-right">{dueDateBuffer} days</span>
+            </div>
           </div>
+          {uniquePublishers.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-white/10 grid grid-cols-2 gap-3">
+              {uniquePublishers.map(pub => {
+                const pubKey = pub.toLowerCase();
+                const currentVal = publisherLeadTimes[pubKey] ?? dueDateBuffer;
+                const isDefault = !(pubKey in publisherLeadTimes) || publisherLeadTimes[pubKey] === dueDateBuffer;
+                return (
+                  <div key={pub} className="flex items-center gap-3">
+                    <span className="text-sm text-white/70 w-32 truncate" title={pub}>{pub}</span>
+                    <input type="range" min="1" max="21" value={currentVal}
+                      onChange={(e) => handlePublisherLeadTimeChange(pubKey, parseInt(e.target.value))}
+                      className="flex-1 accent-sunny-yellow" />
+                    <span className={`text-xs w-16 text-right ${isDefault ? 'text-white/40' : 'text-sunny-yellow font-medium'}`}>{currentVal} days</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Due Bar Chart */}
@@ -1164,8 +1339,9 @@ export default function BriefPage() {
                   {specs.map(spec => (
                     <SpecCard key={spec.id} spec={spec} channel={channelKey} onStatusChange={handleStatusChange}
                       onExpand={toggleSpecExpanded} isExpanded={expandedSpecs.has(spec.id)}
-                      onPlacementEdit={handlePlacementEdit} onDeletePlacement={handleDeletePlacement}
-                      onDeleteCard={handleDeleteSpecCard} attachments={brief.attachments} />
+                      onPlacementEdit={handlePlacementEdit} onPlacementDelete={handlePlacementDelete}
+                      onDeleteCard={handleDeleteCard} attachments={brief.attachments}
+                      specNote={specNotes[spec.id]} onSpecNoteChange={handleSpecNoteChange} briefId={briefId} />
                   ))}
                 </div>
               </div>

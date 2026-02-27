@@ -5,6 +5,9 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const AdmZip = require('adm-zip');
 
+// Allow up to 60s for large files + AI parsing
+export const maxDuration = 60;
+
 export async function POST(request) {
   const debug = { steps: [] };
 
@@ -55,14 +58,12 @@ export async function POST(request) {
     }
 
     debug.steps.push(`Result: ${result.placements.length} placements, ${result.detectedChannel}/${result.detectedPublisher}`);
-    debug.steps.push(`PublisherSpecs: ${JSON.stringify(result.publisherSpecs)}`);
 
     return NextResponse.json({
       success: true,
       detectedChannel: result.detectedChannel,
       detectedPublisher: result.detectedPublisher,
       placements: result.placements,
-      publisherSpecs: result.publisherSpecs,
       validation: validation,
       debug
     });
@@ -83,9 +84,7 @@ function extractExcel(buffer) {
   
   // FIRST: Try to extract text from floating text boxes/shapes (drawings)
   const drawingText = extractDrawingText(buffer);
-  console.log(`[PARSE] Drawing text extraction: found ${drawingText.length} text blocks`);
   if (drawingText.length > 0) {
-    console.log(`[PARSE] Drawing text preview: ${drawingText[0].substring(0, 200)}...`);
     lines.push('--- PUBLISHER REQUIREMENTS (from document header/text box) ---');
     drawingText.forEach(text => {
       lines.push(`[PUBLISHER SPECS] ${text}`);
@@ -158,48 +157,52 @@ function extractExcel(buffer) {
 
 // ============================================
 // EXTRACT TEXT FROM EXCEL DRAWINGS (text boxes, shapes)
-// Uses adm-zip to read the xlsx as a zip archive and extract DrawingML text
+// Uses XLSX's built-in zip reading - no extra dependencies
 // ============================================
 function extractDrawingText(buffer) {
   const texts = [];
   
   try {
-    const zip = new AdmZip(buffer);
-    const entries = zip.getEntries();
+    // XLSX can read the raw zip contents with bookFiles option
+    const workbook = XLSX.read(buffer, { type: 'buffer', bookFiles: true });
     
-    for (const entry of entries) {
-      const name = entry.entryName;
-      // Look for drawing XML files AND vmlDrawing files (text boxes can be in either)
-      if ((name.includes('drawings/') || name.includes('vmlDrawing')) && (name.endsWith('.xml') || name.endsWith('.vml'))) {
-        const content = entry.getData().toString('utf8');
+    // Access the underlying files in the xlsx archive
+    const files = workbook.files || {};
+    
+    // Look for drawing XML files
+    for (const filename of Object.keys(files)) {
+      if (filename.includes('drawings/') && filename.endsWith('.xml')) {
+        // Get the file content
+        const file = files[filename];
+        let content = '';
+        
+        if (file.asText) {
+          content = file.asText();
+        } else if (file._data && file._data.getContent) {
+          content = file._data.getContent().toString('utf8');
+        } else if (typeof file === 'string') {
+          content = file;
+        } else if (Buffer.isBuffer(file)) {
+          content = file.toString('utf8');
+        }
         
         if (content) {
-          // Extract text from DrawingML <a:t> tags (standard drawings)
-          const drawingMatches = content.match(/<a:t>([^<]+)<\/a:t>/g);
-          // Also extract from VML <t> tags inside text boxes
-          const vmlMatches = content.match(/<v:textbox[^>]*>[\s\S]*?<\/v:textbox>/gi);
-          
-          let allTextParts = [];
-          
-          if (drawingMatches) {
-            allTextParts = drawingMatches
+          // Extract text from DrawingML <a:t> tags
+          const textMatches = content.match(/<a:t>([^<]+)<\/a:t>/g);
+          if (textMatches) {
+            const allText = textMatches
               .map(match => match.replace(/<\/?a:t>/g, '').trim())
-              .filter(t => t);
-          }
-          
-          if (vmlMatches) {
-            for (const vmlBlock of vmlMatches) {
-              // Extract text content from within VML textboxes
-              const innerText = vmlBlock.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-              if (innerText) allTextParts.push(innerText);
-            }
-          }
-          
-          if (allTextParts.length > 0) {
-            const allText = allTextParts.join(' ').trim();
-            // Text boxes in media schedules are almost always spec/requirement info
-            // Don't filter by keywords - let the AI decide what's relevant
-            if (allText.length > 10) {
+              .filter(t => t)
+              .join(' ');
+            
+            // Only include if it looks like spec info
+            const lower = allText.toLowerCase();
+            if (lower.includes('important') || lower.includes('dpi') || 
+                lower.includes('artwork') || lower.includes('file') ||
+                lower.includes('working days') || lower.includes('bitrate') ||
+                lower.includes('@') || lower.includes('deadline') ||
+                lower.includes('specification') || lower.includes('format') ||
+                lower.includes('pixel')) {
               texts.push(allText);
             }
           }
@@ -500,6 +503,34 @@ function normalizeDate(dateStr, format = 'DD/MM') {
 }
 
 // ============================================
+// EXTRACT SPOT LENGTH - handles radio/tv duration from multiple fields
+// ============================================
+function extractSpotLength(p) {
+  // Direct fields
+  const raw = p.spotLength || p.spot_length || p.duration || p.dur || p.adLength || p.ad_length || null;
+  if (raw) {
+    // If it's already a number, return it
+    const num = parseInt(raw);
+    if (!isNaN(num) && num > 0) return num;
+    // Try extracting number from string like "15 seconds" or "15s" or "15\""
+    const match = String(raw).match(/(\d+)\s*(?:s|sec|seconds?|")?/i);
+    if (match) return parseInt(match[1]);
+  }
+  
+  // Try to extract from siteName (e.g. "Gold FM - Breakfast 30s" or "15\" Script Pointers")
+  const nameStr = p.siteName || p.name || '';
+  const nameMatch = nameStr.match(/(\d+)\s*(?:s|sec|seconds?|"|'')/i);
+  if (nameMatch) return parseInt(nameMatch[1]);
+  
+  // Try dimensions field for radio (sometimes stored as "30 seconds")
+  const dimStr = p.dimensions || '';
+  const dimMatch = dimStr.match(/(\d+)\s*(?:s|sec|seconds?)/i);
+  if (dimMatch) return parseInt(dimMatch[1]);
+  
+  return null;
+}
+
+// ============================================
 // NORMALIZE RESULT
 // ============================================
 function normalize(parsed, debug) {
@@ -555,7 +586,7 @@ function normalize(parsed, debug) {
       slotLength: p.slotLength || p.slot_length || null,
       station: p.station || null,
       daypart: p.daypart || p.dayPart || p.day_part || null,
-      spotLength: p.spotLength || p.duration || p.dur || null,
+      spotLength: extractSpotLength(p),
       spots: p.spots || p.total || p.spotCount || null,
       startDate: normalizeDate(p.startDate || p.start_date || p.bookingStartDate, dateFormat),
       endDate: normalizeDate(p.endDate || p.end_date || p.bookingEndDate, dateFormat),
@@ -566,7 +597,6 @@ function normalize(parsed, debug) {
   
   // Extract and normalize publisher specs
   const publisherSpecs = parsed.publisherSpecs || {};
-  console.log(`[PARSE] AI returned publisherSpecs:`, JSON.stringify(publisherSpecs));
   
   return {
     placements: normalized,
