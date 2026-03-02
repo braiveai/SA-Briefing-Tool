@@ -619,7 +619,12 @@ export default function NewBrief() {
                         {(client.name[0] || '?').toUpperCase()}
                       </div>
                       <div>
-                        <h2 className="font-semibold">{client.name}</h2>
+                        <h2 className="font-semibold">
+                          <button onClick={(e) => { e.stopPropagation(); router.push(`/client/${client.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`); }}
+                            className="hover:text-sunny-yellow transition-colors" title="View client portal">
+                            {client.name}
+                          </button>
+                        </h2>
                         <div className="flex items-center gap-3 text-xs text-white/40 mt-0.5">
                           <span>{client.briefs.length} brief{client.briefs.length !== 1 ? 's' : ''}</span>
                           <span>{client.totalPlacements} placement{client.totalPlacements !== 1 ? 's' : ''}</span>

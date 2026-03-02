@@ -1281,12 +1281,16 @@ export default function BriefPage() {
     setTimeout(() => setCopySuccess(false), 2000);
   }
 
-  function copyPortalLink() {
-    const slug = (brief?.clientName || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const url = `${window.location.origin}/client/${slug}`;
-    navigator.clipboard.writeText(url);
-    setCopySuccess(true);
-    setTimeout(() => setCopySuccess(false), 2000);
+  function getClientSlug() {
+    return (brief?.clientName || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  }
+
+  async function handleDeleteBrief() {
+    if (!confirm(`Delete "${brief?.campaignName || 'this brief'}"? This cannot be undone.`)) return;
+    try {
+      await fetch(`/api/brief/${briefId}`, { method: 'DELETE' });
+      router.push('/');
+    } catch (err) { console.error('Delete failed:', err); }
   }
 
   if (loading) {
@@ -1314,13 +1318,18 @@ export default function BriefPage() {
               <button onClick={() => router.push('/')} className="text-white/50 hover:text-white">←</button>
               <img src="/sunny-logo-white.png" alt="Sunny" className="h-6" />
               <div className="border-l border-white/20 pl-4">
-                <h1 className="text-xl font-semibold">{brief.clientName}</h1>
+                <h1 className="text-xl font-semibold">
+                  <button onClick={() => router.push(`/client/${getClientSlug()}`)} className="hover:text-sunny-yellow transition-colors" title="View all briefs for this client">
+                    {brief.clientName}
+                  </button>
+                </h1>
                 <p className="text-sm text-white/50">{brief.campaignName}</p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <button onClick={() => setShowSettings(!showSettings)} className={`px-3 py-2 border rounded-lg text-sm hover:bg-white/10 transition-colors ${showSettings ? 'bg-white/10 border-sunny-yellow/50 text-sunny-yellow' : 'bg-white/5 border-white/10'}`} title="Brief settings">
+            <div className="flex items-center gap-2">
+              <button onClick={() => setShowSettings(!showSettings)} className={`px-3 py-2 border rounded-lg text-sm hover:bg-white/10 transition-colors relative ${showSettings ? 'bg-white/10 border-sunny-yellow/50 text-sunny-yellow' : 'bg-white/5 border-white/10'}`} title="Brief settings">
                 ⚙️
+                {(!brief.bestPractices && Object.keys(publisherLeadTimes).length === 0) && <div className="absolute -top-1 -right-1 w-2 h-2 bg-amber-400 rounded-full" />}
               </button>
               <button onClick={() => setShowAddModal(true)} className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Add placement">
                 + Add
@@ -1330,11 +1339,15 @@ export default function BriefPage() {
               </button>
               <button onClick={copyClientLink}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${copySuccess ? 'bg-green-500 text-white' : 'bg-white/5 border border-white/10 hover:bg-white/10'}`}>
-                {copySuccess ? '✓ Copied!' : '🔗 Brief Link'}
+                {copySuccess ? '✓ Copied!' : '🔗 Client Link'}
               </button>
-              <button onClick={copyPortalLink}
-                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Copy client portal link (all briefs for this client)">
+              <button onClick={() => router.push(`/client/${getClientSlug()}`)}
+                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Client portal — all briefs for this client">
                 🏠 Portal
+              </button>
+              <button onClick={handleDeleteBrief}
+                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10 hover:text-red-400 hover:border-red-400/30 transition-colors" title="Delete this brief">
+                🗑
               </button>
               <button onClick={() => router.push(`/brief/${briefId}/client`)}
                 className="px-4 py-2 bg-sunny-yellow text-black rounded-lg text-sm font-semibold hover:bg-yellow-300">
@@ -1357,6 +1370,19 @@ export default function BriefPage() {
                 </a>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Best Practices Banner (visible when settings closed + content exists) */}
+        {!showSettings && brief.bestPractices && (
+          <div className="bg-amber-500/5 border border-amber-500/15 rounded-xl px-4 py-3 mb-6 flex items-start gap-3 cursor-pointer hover:bg-amber-500/10 transition-colors"
+            onClick={() => setShowSettings(true)}>
+            <span className="text-sm mt-0.5">💡</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs text-amber-400/60 font-medium mb-0.5">Creative Recommendations</div>
+              <div className="text-sm text-white/60 line-clamp-2 whitespace-pre-wrap">{brief.bestPractices}</div>
+            </div>
+            <span className="text-white/20 text-xs mt-1">Edit ⚙️</span>
           </div>
         )}
 
@@ -1467,50 +1493,98 @@ export default function BriefPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/10 text-left text-xs text-white/40">
+                  <th className="px-4 py-3 font-medium w-8"></th>
                   <th className="px-4 py-3 font-medium">Channel</th>
                   <th className="px-4 py-3 font-medium">Spec</th>
                   <th className="px-4 py-3 font-medium">Publisher</th>
                   <th className="px-4 py-3 font-medium text-center">Placements</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Flight</th>
                   <th className="px-4 py-3 font-medium">Due</th>
-                  <th className="px-4 py-3 font-medium">Note</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
                 {Object.entries(filteredChannelData).flatMap(([channelKey, channel]) =>
-                  Object.values(channel.specs).map(spec => {
+                  Object.values(channel.specs).flatMap(spec => {
                     const config = CHANNELS[channelKey] || CHANNELS.ooh;
                     const dueDate = spec.earliestDue;
                     const daysLeft = dueDate ? Math.ceil((new Date(dueDate) - new Date()) / (1000*60*60*24)) : null;
                     const statusStep = STATUS_STEPS.findIndex(s => s.key === (spec.placements[0]?.status || 'briefed'));
-                    return (
+                    const isExp = expandedSpecs.has(spec.id);
+                    const rows = [(
                       <tr key={spec.id} className="hover:bg-white/[0.03] cursor-pointer" onClick={() => toggleSpecExpanded(spec.id)}>
-                        <td className="px-4 py-3"><span className="mr-1.5">{config.icon}</span>{config.name}</td>
+                        <td className="px-4 py-3 text-white/30 text-xs"><span className={`inline-block transition-transform ${isExp ? 'rotate-90' : ''}`}>▶</span></td>
+                        <td className="px-4 py-3"><span className="mr-1.5">{config.icon}</span><span className="text-white/60">{config.name}</span></td>
                         <td className="px-4 py-3 font-medium">{spec.label}</td>
                         <td className="px-4 py-3 text-white/60">{spec.publisher || '—'}</td>
                         <td className="px-4 py-3 text-center">{spec.placements.length}</td>
+                        <td className="px-4 py-3 text-white/50 text-xs">
+                          {spec.minStart && spec.maxEnd ? `${formatDate(spec.minStart)} → ${formatDate(spec.maxEnd)}` : '—'}
+                        </td>
+                        <td className="px-4 py-3">
+                          {dueDate ? (
+                            <div>
+                              <span className={`text-xs font-medium ${daysLeft < 0 ? 'text-red-400' : daysLeft <= 3 ? 'text-red-400' : daysLeft <= 7 ? 'text-amber-400' : 'text-white/50'}`}>
+                                {daysLeft < 0 ? 'Overdue' : daysLeft === 0 ? 'Today' : `${daysLeft}d left`}
+                              </span>
+                              <div className="text-xs text-white/30">{formatDateFull(dueDate)}</div>
+                            </div>
+                          ) : <span className="text-white/20">—</span>}
+                        </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1">
                             {STATUS_STEPS.map((step, i) => (
                               <div key={step.key} className={`w-2 h-2 rounded-full ${i <= statusStep ? 'bg-sunny-yellow' : 'bg-white/10'}`} title={step.label} />
                             ))}
-                            <span className="text-xs text-white/40 ml-1.5">{STATUS_STEPS[statusStep]?.label || 'Briefed'}</span>
+                            <span className="text-xs text-white/40 ml-1">{STATUS_STEPS[statusStep]?.label || 'Briefed'}</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3">
-                          {dueDate ? (
-                            <span className={`text-xs font-medium ${daysLeft < 0 ? 'text-red-400' : daysLeft <= 3 ? 'text-red-400' : daysLeft <= 7 ? 'text-amber-400' : 'text-white/50'}`}>
-                              {daysLeft < 0 ? 'Overdue' : daysLeft === 0 ? 'Today' : `${daysLeft}d`}
-                            </span>
-                          ) : <span className="text-white/20">—</span>}
-                        </td>
-                        <td className="px-4 py-3 text-white/40 text-xs max-w-[150px] truncate">{specNotes[spec.id] || '—'}</td>
                       </tr>
-                    );
+                    )];
+                    // Expanded detail row
+                    if (isExp) {
+                      rows.push(
+                        <tr key={`${spec.id}-detail`} className="bg-white/[0.02]">
+                          <td colSpan={8} className="px-6 py-4">
+                            <div className="grid grid-cols-3 gap-6 text-xs mb-3">
+                              <div>
+                                <span className="text-white/40">Dimensions: </span>
+                                <span className="text-white/80">{spec.label}</span>
+                              </div>
+                              {spec.placements[0]?.specs?.fileFormat && <div>
+                                <span className="text-white/40">Format: </span>
+                                <span className="text-white/80">{spec.placements[0].specs.fileFormat}</span>
+                              </div>}
+                              {spec.placements[0]?.specs?.maxFileSize && <div>
+                                <span className="text-white/40">Max Size: </span>
+                                <span className="text-white/80">{spec.placements[0].specs.maxFileSize}</span>
+                              </div>}
+                            </div>
+                            {specNotes[spec.id] && <div className="text-xs text-white/50 mb-3">📝 {specNotes[spec.id]}</div>}
+                            <div className="text-xs text-white/30">
+                              Placements: {spec.placements.map(p => p.placementName || 'Unknown').join(' • ')}
+                            </div>
+                            <div className="flex items-center gap-3 mt-3">
+                              <button onClick={(e) => { e.stopPropagation(); setViewMode('cards'); }}
+                                className="text-xs text-sunny-yellow hover:underline">View in cards →</button>
+                              <button onClick={(e) => { e.stopPropagation(); if (confirm('Delete this spec and all its placements?')) handleDeleteCard(spec.placements.map(p => p.id)); }}
+                                className="text-xs text-white/20 hover:text-red-400">Delete</button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+                    return rows;
                   })
                 )}
               </tbody>
             </table>
+            {Object.keys(filteredChannelData).length === 0 && (
+              <div className="text-center py-12">
+                <div className="text-3xl mb-2">{selectedWeek ? '🔍' : '📋'}</div>
+                <p className="text-white/40 text-sm">{selectedWeek ? 'No creatives due this week.' : 'No placements yet.'}</p>
+              </div>
+            )}
           </div>
         ) : (
         /* CARD VIEW */
@@ -1540,9 +1614,10 @@ export default function BriefPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   {specs.map(spec => {
+                    // Merge only makes sense for radio/tv same-duration specs across timeslots
                     const mergeTargets = (channelKey === 'radio' || channelKey === 'tv')
                       ? specs.filter(s => s.id !== spec.id && s.label === spec.label).map(s => ({ id: s.id, label: `${s.publisher || 'Unknown'} - ${s.label}` }))
-                      : specs.filter(s => s.id !== spec.id).map(s => ({ id: s.id, label: s.label }));
+                      : [];
                     return (
                       <SpecCard key={spec.id} spec={spec} channel={channelKey} onStatusChange={handleStatusChange}
                         onExpand={toggleSpecExpanded} isExpanded={expandedSpecs.has(spec.id)}
