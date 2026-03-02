@@ -32,7 +32,7 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { clientName, campaignName, items } = body;
+    const { clientName, campaignName, items, bestPractices, publisherLeadTimes, specNotes, dueDateBuffer } = body;
 
     if (!clientName || !campaignName) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -41,16 +41,25 @@ export async function POST(request) {
     const id = generateId();
     const now = new Date().toISOString();
 
+    // Ensure items have unique IDs (for cloning)
+    const processedItems = (items || []).map(item => ({
+      ...item,
+      id: item.id || `${id}-${Math.random().toString(36).slice(2, 8)}`,
+    }));
+
     // Build channel-grouped structure from items
-    const groups = buildGroups(items || []);
+    const groups = buildGroups(processedItems);
 
     const brief = {
       id,
       clientName,
       campaignName,
-      items: items || [],
+      items: processedItems,
       groups, // Channel → Specs hierarchy
-      dueDateBuffer: 5, // Default: due 5 days before flight start
+      dueDateBuffer: dueDateBuffer || 5,
+      bestPractices: bestPractices || null,
+      publisherLeadTimes: publisherLeadTimes || {},
+      specNotes: specNotes || {},
       createdAt: now,
       updatedAt: now,
     };

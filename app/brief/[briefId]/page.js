@@ -430,6 +430,9 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlace
           <div className="p-4 border-t border-white/5">
             <input type="file" ref={fileInputRef} onChange={handleGroupUpload} className="hidden" />
             <div onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-sunny-yellow', 'bg-sunny-yellow/10'); }}
+              onDragLeave={(e) => { e.currentTarget.classList.remove('border-sunny-yellow', 'bg-sunny-yellow/10'); }}
+              onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-sunny-yellow', 'bg-sunny-yellow/10'); const file = e.dataTransfer.files?.[0]; if (file) { const dt = new DataTransfer(); dt.items.add(file); fileInputRef.current.files = dt.files; handleGroupUpload({ target: { files: [file] } }); } }}
               className="border-2 border-dashed border-white/20 rounded-xl p-5 text-center hover:border-sunny-yellow/50 hover:bg-sunny-yellow/5 transition-all cursor-pointer group">
               {uploading.group ? (
                 <div className="flex items-center justify-center gap-2"><div className="animate-spin w-5 h-5 border-2 border-sunny-yellow border-t-transparent rounded-full" /><span className="text-sm">Uploading...</span></div>
@@ -951,6 +954,8 @@ export default function BriefPage() {
   const [bestPracticesText, setBestPracticesText] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [viewMode, setViewMode] = useState('cards');
+  const [sortBy, setSortBy] = useState('default'); // 'default' | 'due' | 'status' | 'publisher'
+  const [channelFilter, setChannelFilter] = useState(null); // null = all
   const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved'
   const saveTimerRef = useRef(null);
 
@@ -1062,17 +1067,48 @@ export default function BriefPage() {
   }, [channelData]);
 
   const filteredChannelData = useMemo(() => {
-    if (!selectedWeek) return channelData;
-    const filtered = {};
-    Object.entries(channelData).forEach(([channelKey, channel]) => {
-      const filteredSpecs = {};
-      Object.entries(channel.specs).forEach(([specKey, spec]) => {
-        if (spec.earliestDue && getWeekKey(spec.earliestDue) === selectedWeek) filteredSpecs[specKey] = spec;
+    let data = channelData;
+    // Channel filter
+    if (channelFilter) {
+      const filtered = {};
+      if (data[channelFilter]) filtered[channelFilter] = data[channelFilter];
+      data = filtered;
+    }
+    // Week filter
+    if (selectedWeek) {
+      const filtered = {};
+      Object.entries(data).forEach(([channelKey, channel]) => {
+        const filteredSpecs = {};
+        Object.entries(channel.specs).forEach(([specKey, spec]) => {
+          if (spec.earliestDue && getWeekKey(spec.earliestDue) === selectedWeek) filteredSpecs[specKey] = spec;
+        });
+        if (Object.keys(filteredSpecs).length > 0) filtered[channelKey] = { ...channel, specs: filteredSpecs };
       });
-      if (Object.keys(filteredSpecs).length > 0) filtered[channelKey] = { ...channel, specs: filteredSpecs };
-    });
-    return filtered;
-  }, [channelData, selectedWeek]);
+      data = filtered;
+    }
+    // Sort specs within channels
+    if (sortBy !== 'default') {
+      const sorted = {};
+      Object.entries(data).forEach(([channelKey, channel]) => {
+        const specsArr = Object.entries(channel.specs);
+        specsArr.sort(([, a], [, b]) => {
+          if (sortBy === 'due') {
+            const da = a.earliestDue || '9999'; const db = b.earliestDue || '9999';
+            return da.localeCompare(db);
+          }
+          if (sortBy === 'status') {
+            const order = { delivered: 4, approved: 3, review: 2, in_progress: 1, briefed: 0 };
+            return (order[b.status] || 0) - (order[a.status] || 0);
+          }
+          if (sortBy === 'publisher') return (a.publisher || '').localeCompare(b.publisher || '');
+          return 0;
+        });
+        sorted[channelKey] = { ...channel, specs: Object.fromEntries(specsArr) };
+      });
+      data = sorted;
+    }
+    return data;
+  }, [channelData, selectedWeek, channelFilter, sortBy]);
 
   const stats = useMemo(() => {
     let totalCreatives = 0, totalPlacements = 0, completed = 0, dueSoon = 0;
@@ -1286,6 +1322,34 @@ export default function BriefPage() {
     } catch (err) { console.error('Delete failed:', err); }
   }
 
+  async function handleDuplicateBrief() {
+    if (!brief) return;
+    const newName = prompt('Campaign name for the copy:', `${brief.campaignName} (Copy)`);
+    if (!newName) return;
+    try {
+      const res = await fetch('/api/briefs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientName: brief.clientName,
+          campaignName: newName,
+          items: (brief.items || []).map(item => ({
+            ...item,
+            id: undefined, // Let API generate new IDs
+            status: 'briefed',
+            uploadedFile: null,
+          })),
+          bestPractices: brief.bestPractices,
+          dueDateBuffer: brief.dueDateBuffer || dueDateBuffer,
+          publisherLeadTimes: brief.publisherLeadTimes || publisherLeadTimes,
+          specNotes: brief.specNotes || specNotes,
+        }),
+      });
+      const data = await res.json();
+      window.open(`/brief/${data.id}`, '_blank');
+    } catch (err) { console.error('Duplicate failed:', err); }
+  }
+
   if (loading) {
     return <div className="min-h-screen bg-sunny-dark flex items-center justify-center">
       <div className="animate-spin w-8 h-8 border-2 border-sunny-yellow border-t-transparent rounded-full" />
@@ -1337,6 +1401,10 @@ export default function BriefPage() {
               <button onClick={() => window.open(`/client/${getClientSlug()}`, '_blank')}
                 className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Client portal — all briefs for this client (opens new tab)">
                 🏠 Portal
+              </button>
+              <button onClick={handleDuplicateBrief}
+                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10 transition-colors" title="Duplicate this brief">
+                📋 Clone
               </button>
               <button onClick={handleDeleteBrief}
                 className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10 hover:text-red-400 hover:border-red-400/30 transition-colors" title="Delete this brief">
@@ -1491,6 +1559,34 @@ export default function BriefPage() {
             </label>
           </div>
         </div>
+
+        {/* Sort, Filter & View Controls */}
+        {stats.totalCreatives > 3 && (
+          <div className="flex items-center gap-3 mb-4">
+            {/* Channel filter chips */}
+            <div className="flex items-center gap-1.5 flex-1">
+              <button onClick={() => setChannelFilter(null)}
+                className={`text-xs px-2.5 py-1 rounded-full transition-colors ${!channelFilter ? 'bg-sunny-yellow/20 text-sunny-yellow' : 'bg-white/5 text-white/40 hover:text-white/60'}`}>All</button>
+              {Object.keys(channelData).map(ch => {
+                const cfg = CHANNELS[ch];
+                return (
+                  <button key={ch} onClick={() => setChannelFilter(channelFilter === ch ? null : ch)}
+                    className={`text-xs px-2.5 py-1 rounded-full transition-colors ${channelFilter === ch ? 'bg-sunny-yellow/20 text-sunny-yellow' : 'bg-white/5 text-white/40 hover:text-white/60'}`}>
+                    {cfg?.icon} {cfg?.name}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Sort */}
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+              className="text-xs bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-white/50 focus:outline-none">
+              <option value="default">Sort: Default</option>
+              <option value="due">Sort: Due Date</option>
+              <option value="status">Sort: Status</option>
+              <option value="publisher">Sort: Publisher</option>
+            </select>
+          </div>
+        )}
 
         {/* Due Bar Chart */}
         <DueBarChart specs={allSpecs} onWeekClick={setSelectedWeek} selectedWeek={selectedWeek} />
