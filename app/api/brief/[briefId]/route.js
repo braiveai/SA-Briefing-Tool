@@ -146,6 +146,7 @@ export async function PATCH(request, { params }) {
     if (updates.dueDateBuffer !== undefined) brief.dueDateBuffer = updates.dueDateBuffer;
     if (updates.publisherLeadTimes) brief.publisherLeadTimes = updates.publisherLeadTimes;
     if (updates.specNotes) brief.specNotes = updates.specNotes;
+    if (updates.bestPractices !== undefined) brief.bestPractices = updates.bestPractices;
 
     brief.updatedAt = new Date().toISOString();
 

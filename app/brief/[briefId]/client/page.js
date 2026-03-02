@@ -438,6 +438,8 @@ export default function ClientBriefPage() {
         <div className="max-w-6xl mx-auto px-6 py-6">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-4">
+              <a href={`/client/${(brief.clientName || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`}
+                className="text-white/50 hover:text-white text-lg" title="All briefs for this client">←</a>
               <img src="/sunny-logo-white.png" alt="Sunny" className="h-6" />
               <div className="border-l border-white/20 pl-4">
                 <p className="text-sm text-white/50">Creative Brief</p>
@@ -486,6 +488,15 @@ export default function ClientBriefPage() {
               <span className="text-blue-400 font-medium">Reference Documents:</span>
               {brief.attachments.map((att, i) => (<a key={i} href={att.url} target="_blank" rel="noopener noreferrer" className="text-blue-300 hover:text-blue-200 underline">{att.name}</a>))}
             </div>
+          </div>
+        )}
+        {brief.bestPractices && (
+          <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-8">
+            <div className="flex items-center gap-2 mb-2">
+              <span>💡</span>
+              <span className="text-sm font-medium">Creative Recommendations & Best Practices</span>
+            </div>
+            <div className="text-sm text-white/70 whitespace-pre-wrap">{brief.bestPractices}</div>
           </div>
         )}
         <div className="space-y-10">

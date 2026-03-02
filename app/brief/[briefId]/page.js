@@ -223,7 +223,7 @@ function DueBarChart({ specs, onWeekClick, selectedWeek }) {
 // ============================================
 // SPEC CARD WITH EDIT MODE
 // ============================================
-function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlacementEdit, onPlacementDelete, onDeleteCard, attachments, specNote, onSpecNoteChange, briefId }) {
+function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlacementEdit, onPlacementDelete, onDeleteCard, attachments, specNote, onSpecNoteChange, briefId, mergeTargets, onMerge }) {
   const [editingPlacement, setEditingPlacement] = useState(null);
   const [editValues, setEditValues] = useState({});
   const [editingNote, setEditingNote] = useState(false);
@@ -356,11 +356,20 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlace
             <span className={`text-white/30 text-sm transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
           </div>
         </div>
-        {/* Delete card - only visible on hover */}
+        {/* Delete/Merge card - only visible on hover */}
         {isExpanded && (
-          <div className="px-4 pb-2 flex justify-end">
+          <div className="px-4 pb-2 flex justify-between items-center">
+            {mergeTargets && mergeTargets.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-white/30">Merge into:</span>
+                {mergeTargets.map(t => (
+                  <button key={t.id} onClick={(e) => { e.stopPropagation(); if (confirm(`Merge "${spec.label}" placements into "${t.label}"?`)) onMerge(spec.id, t.id); }}
+                    className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-white/50 hover:text-sunny-yellow hover:border-sunny-yellow/30">{t.label}</button>
+                ))}
+              </div>
+            )}
             <button onClick={(e) => { e.stopPropagation(); if (confirm('Delete this entire spec card and all its placements?')) onDeleteCard(spec.placements.map(p => p.id)); }}
-              className="text-xs text-white/20 hover:text-red-400">Delete card</button>
+              className="text-xs text-white/20 hover:text-red-400 ml-auto">Delete card</button>
           </div>
         )}
       </div>
@@ -550,38 +559,55 @@ function AddPlacementModal({ isOpen, onClose, onAddManual, onImport }) {
   if (!isOpen) return null;
 
   async function handleFileUpload(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
     
     setImporting(true);
     setImportError(null);
     
-    const formData = new FormData();
-    formData.append('file', file);
+    let allPlacements = [];
+    let lastChannel = 'ooh';
+    let lastPublisher = '';
+    let lastSpecs = null;
     
-    try {
-      const res = await fetch('/api/parse-schedule', { method: 'POST', body: formData });
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append('file', file);
       
-      if (!res.ok) {
-        let errorMsg = 'Failed to parse schedule';
-        try { const errData = await res.json(); errorMsg = errData.error || errorMsg; }
-        catch { const text = await res.text().catch(() => ''); if (text.includes('An error')) errorMsg = 'Server error — try a smaller file.'; else if (text) errorMsg = text.substring(0, 200); }
-        throw new Error(errorMsg);
+      try {
+        const res = await fetch('/api/parse-schedule', { method: 'POST', body: formData });
+        
+        if (!res.ok) {
+          let errorMsg = `Failed to parse ${file.name}`;
+          try { const errData = await res.json(); errorMsg = errData.error || errorMsg; }
+          catch { const text = await res.text().catch(() => ''); if (text.includes('An error')) errorMsg = `${file.name}: Server error — try a smaller file.`; else if (text) errorMsg = text.substring(0, 200); }
+          throw new Error(errorMsg);
+        }
+        
+        const data = await res.json();
+        if (data.placements?.length > 0) {
+          lastChannel = data.detectedChannel || lastChannel;
+          lastPublisher = data.detectedPublisher || lastPublisher;
+          lastSpecs = data.publisherSpecs || lastSpecs;
+          const placementsWithIds = data.placements.map((p, i) => ({ ...p, _importId: `import-${Date.now()}-${allPlacements.length + i}`, _sourceFile: file.name }));
+          allPlacements = [...allPlacements, ...placementsWithIds];
+        }
+      } catch (err) {
+        setImportError(err.message);
+        break;
       }
-      
-      const data = await res.json();
-      if (!data.placements || data.placements.length === 0) throw new Error('No placements found in document.');
-      
-      setDetectedChannel(data.detectedChannel || 'ooh');
-      setDetectedPublisher(data.detectedPublisher || '');
-      setImportPublisherSpecs(data.publisherSpecs || null);
-      
-      const placementsWithIds = data.placements.map((p, i) => ({ ...p, _importId: p._importId || `import-${Date.now()}-${i}` }));
-      setParsedPlacements(placementsWithIds);
-      setSelectedImports(new Set(placementsWithIds.map(p => p._importId)));
-    } catch (err) {
-      setImportError(err.message);
     }
+    
+    if (allPlacements.length > 0) {
+      setDetectedChannel(lastChannel);
+      setDetectedPublisher(lastPublisher);
+      setImportPublisherSpecs(lastSpecs);
+      setParsedPlacements(allPlacements);
+      setSelectedImports(new Set(allPlacements.map(p => p._importId)));
+    } else if (!importError) {
+      setImportError('No placements found in uploaded files.');
+    }
+    
     setImporting(false);
     e.target.value = '';
   }
@@ -734,7 +760,7 @@ function AddPlacementModal({ isOpen, onClose, onAddManual, onImport }) {
               {parsedPlacements.length === 0 ? (
                 <div>
                   <label className="block border-2 border-dashed border-white/20 rounded-xl p-8 text-center cursor-pointer hover:border-sunny-yellow/50 hover:bg-sunny-yellow/5 transition-all">
-                    <input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={handleFileUpload} className="hidden" />
+                    <input type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={handleFileUpload} className="hidden" multiple />
                     {importing ? (
                       <div className="flex items-center justify-center gap-2">
                         <div className="animate-spin w-5 h-5 border-2 border-sunny-yellow border-t-transparent rounded-full" />
@@ -921,6 +947,8 @@ export default function BriefPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showRefModal, setShowRefModal] = useState(false);
   const [specNotes, setSpecNotes] = useState({});
+  const [editingBestPractices, setEditingBestPractices] = useState(false);
+  const [bestPracticesText, setBestPracticesText] = useState('');
 
   const briefId = params.briefId || params.id;
 
@@ -1163,6 +1191,46 @@ export default function BriefPage() {
     }
   }
 
+  async function handleMergeSpecs(sourceSpecId, targetSpecId) {
+    // Find the target spec to get its label/key
+    let targetSpec = null;
+    Object.values(channelData).forEach(channel => {
+      Object.values(channel.specs).forEach(spec => {
+        if (spec.id === targetSpecId) targetSpec = spec;
+      });
+    });
+    if (!targetSpec) return;
+    
+    // Find all placement IDs in the source spec
+    let sourceSpec = null;
+    Object.values(channelData).forEach(channel => {
+      Object.values(channel.specs).forEach(spec => {
+        if (spec.id === sourceSpecId) sourceSpec = spec;
+      });
+    });
+    if (!sourceSpec) return;
+    
+    // Update each source placement to match target's specs
+    const targetPlacement = targetSpec.placements[0];
+    for (const placement of sourceSpec.placements) {
+      const updates = {
+        publisherName: targetSpec.publisher,
+        publisher: targetSpec.publisher?.toLowerCase().replace(/\s+/g, '-'),
+      };
+      // Copy dimension/duration from target
+      if (targetPlacement?.specs?.dimensions) {
+        updates.specs = { ...placement.specs, dimensions: targetPlacement.specs.dimensions };
+      }
+      if (targetPlacement?.specs?.adLength) {
+        updates.specs = { ...(updates.specs || placement.specs), adLength: targetPlacement.specs.adLength };
+      }
+      if (targetPlacement?.specs?.spotLength) {
+        updates.specs = { ...(updates.specs || placement.specs), spotLength: targetPlacement.specs.spotLength };
+      }
+      await handlePlacementEdit(placement.id, updates);
+    }
+  }
+
   async function handleAddPlacements(items) {
     setBrief(prev => {
       if (!prev) return prev;
@@ -1193,6 +1261,14 @@ export default function BriefPage() {
 
   function copyClientLink() {
     const url = `${window.location.origin}/brief/${briefId}/client`;
+    navigator.clipboard.writeText(url);
+    setCopySuccess(true);
+    setTimeout(() => setCopySuccess(false), 2000);
+  }
+
+  function copyPortalLink() {
+    const slug = (brief?.clientName || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const url = `${window.location.origin}/client/${slug}`;
     navigator.clipboard.writeText(url);
     setCopySuccess(true);
     setTimeout(() => setCopySuccess(false), 2000);
@@ -1236,7 +1312,11 @@ export default function BriefPage() {
               </button>
               <button onClick={copyClientLink}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${copySuccess ? 'bg-green-500 text-white' : 'bg-white/5 border border-white/10 hover:bg-white/10'}`}>
-                {copySuccess ? '✓ Copied!' : '🔗 Client Link'}
+                {copySuccess ? '✓ Copied!' : '🔗 Brief Link'}
+              </button>
+              <button onClick={copyPortalLink}
+                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Copy client portal link (all briefs for this client)">
+                🏠 Portal
               </button>
               <button onClick={() => router.push(`/brief/${briefId}/client`)}
                 className="px-4 py-2 bg-sunny-yellow text-black rounded-lg text-sm font-semibold hover:bg-yellow-300">
@@ -1263,6 +1343,39 @@ export default function BriefPage() {
             </div>
           </div>
         )}
+
+        {/* Best Practices / Creative Recommendations */}
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <span>💡</span>
+              <span className="text-sm font-medium">Creative Recommendations & Best Practices</span>
+            </div>
+            {!editingBestPractices && (
+              <button onClick={() => { setEditingBestPractices(true); setBestPracticesText(brief.bestPractices || ''); }}
+                className="text-xs text-white/30 hover:text-sunny-yellow">{brief.bestPractices ? 'Edit' : '+ Add'}</button>
+            )}
+          </div>
+          {editingBestPractices ? (
+            <div>
+              <textarea value={bestPracticesText} onChange={e => setBestPracticesText(e.target.value)}
+                rows={4} placeholder="Add creative recommendations, best practices, or guidelines for this campaign..."
+                className="w-full bg-black/30 border border-white/10 rounded-lg p-3 text-sm text-white placeholder-white/30 focus:border-sunny-yellow/50 focus:outline-none resize-y" />
+              <div className="flex justify-end gap-2 mt-2">
+                <button onClick={() => setEditingBestPractices(false)} className="text-xs text-white/30 hover:text-white px-3 py-1">Cancel</button>
+                <button onClick={async () => {
+                  setBrief(prev => prev ? { ...prev, bestPractices: bestPracticesText } : prev);
+                  setEditingBestPractices(false);
+                  await fetch(`/api/brief/${briefId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bestPractices: bestPracticesText }) });
+                }} className="text-xs bg-sunny-yellow/20 text-sunny-yellow px-3 py-1 rounded hover:bg-sunny-yellow/30">Save</button>
+              </div>
+            </div>
+          ) : brief.bestPractices ? (
+            <div className="text-sm text-white/70 whitespace-pre-wrap">{brief.bestPractices}</div>
+          ) : (
+            <p className="text-sm text-white/30 italic">No creative recommendations added yet.</p>
+          )}
+        </div>
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4 mb-8">
@@ -1336,13 +1449,20 @@ export default function BriefPage() {
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
-                  {specs.map(spec => (
-                    <SpecCard key={spec.id} spec={spec} channel={channelKey} onStatusChange={handleStatusChange}
-                      onExpand={toggleSpecExpanded} isExpanded={expandedSpecs.has(spec.id)}
-                      onPlacementEdit={handlePlacementEdit} onPlacementDelete={handlePlacementDelete}
-                      onDeleteCard={handleDeleteCard} attachments={brief.attachments}
-                      specNote={specNotes[spec.id]} onSpecNoteChange={handleSpecNoteChange} briefId={briefId} />
-                  ))}
+                  {specs.map(spec => {
+                    // For radio/tv, merge targets are other specs with same channel (different timeslot groups with same duration)
+                    const mergeTargets = (channelKey === 'radio' || channelKey === 'tv')
+                      ? specs.filter(s => s.id !== spec.id && s.label === spec.label).map(s => ({ id: s.id, label: `${s.publisher || 'Unknown'} - ${s.label}` }))
+                      : specs.filter(s => s.id !== spec.id).map(s => ({ id: s.id, label: s.label }));
+                    return (
+                      <SpecCard key={spec.id} spec={spec} channel={channelKey} onStatusChange={handleStatusChange}
+                        onExpand={toggleSpecExpanded} isExpanded={expandedSpecs.has(spec.id)}
+                        onPlacementEdit={handlePlacementEdit} onPlacementDelete={handlePlacementDelete}
+                        onDeleteCard={handleDeleteCard} attachments={brief.attachments}
+                        specNote={specNotes[spec.id]} onSpecNoteChange={handleSpecNoteChange} briefId={briefId}
+                        mergeTargets={mergeTargets} onMerge={handleMergeSpecs} />
+                    );
+                  })}
                 </div>
               </div>
             );

@@ -264,62 +264,73 @@ export default function NewBrief() {
   // IMPORT FUNCTIONS
   // ============================================
   async function handleFileUpload(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
     
     setImporting(true);
     setImportError(null);
     setParsedPlacements([]);
     
-    const formData = new FormData();
-    formData.append('file', file);
+    let allPlacements = [];
+    let lastChannel = 'ooh';
+    let lastPublisher = '';
+    let lastSpecs = null;
     
-    try {
-      const res = await fetch('/api/parse-schedule', {
-        method: 'POST',
-        body: formData,
-      });
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append('file', file);
       
-      if (!res.ok) {
-        let errorMsg = 'Failed to parse schedule';
-        try {
-          const errData = await res.json();
-          errorMsg = errData.error || errorMsg;
-        } catch {
-          const text = await res.text().catch(() => '');
-          if (res.status === 504 || text.includes('FUNCTION_INVOCATION_TIMEOUT')) {
-            errorMsg = 'Request timed out — try a smaller file or split into separate uploads.';
-          } else if (text.includes('An error occurred')) {
-            errorMsg = 'Server error — the file may be too large or complex. Try again.';
-          } else if (text) { errorMsg = text.substring(0, 200); }
+      try {
+        const res = await fetch('/api/parse-schedule', {
+          method: 'POST',
+          body: formData,
+        });
+        
+        if (!res.ok) {
+          let errorMsg = `Failed to parse ${file.name}`;
+          try {
+            const errData = await res.json();
+            errorMsg = errData.error || errorMsg;
+          } catch {
+            const text = await res.text().catch(() => '');
+            if (res.status === 504 || text.includes('FUNCTION_INVOCATION_TIMEOUT')) {
+              errorMsg = `${file.name}: Request timed out — try a smaller file.`;
+            } else if (text.includes('An error occurred')) {
+              errorMsg = `${file.name}: Server error — file may be too large or complex.`;
+            } else if (text) { errorMsg = text.substring(0, 200); }
+          }
+          throw new Error(errorMsg);
         }
-        throw new Error(errorMsg);
+        
+        const data = await res.json();
+        console.log(`Parse response for ${file.name}:`, data);
+        
+        if (data.placements?.length > 0) {
+          lastChannel = data.detectedChannel || lastChannel;
+          lastPublisher = data.detectedPublisher || lastPublisher;
+          lastSpecs = data.publisherSpecs || lastSpecs;
+          const placementsWithIds = data.placements.map((p, i) => ({
+            ...p,
+            _importId: `import-${Date.now()}-${allPlacements.length + i}`,
+            _sourceFile: file.name,
+          }));
+          allPlacements = [...allPlacements, ...placementsWithIds];
+        }
+      } catch (err) {
+        console.error('Import error:', err);
+        setImportError(err.message);
+        break;
       }
-      
-      const data = await res.json();
-      console.log('Parse response:', data);
-      
-      if (!data.placements || data.placements.length === 0) {
-        throw new Error('No placements found in document.');
-      }
-      
-      // Use AI-detected values
-      setDetectedChannel(data.detectedChannel || 'ooh');
-      setDetectedPublisher(data.detectedPublisher || '');
-      setPublisherSpecs(data.publisherSpecs || null);
-      
-      // Just add import IDs, due dates will be calculated in brief view
-      const placementsWithIds = data.placements.map((p, i) => ({
-        ...p,
-        _importId: p._importId || `import-${Date.now()}-${i}`,
-      }));
-      
-      setParsedPlacements(placementsWithIds);
-      setSelectedImports(new Set(placementsWithIds.map(p => p._importId)));
-      
-    } catch (err) {
-      console.error('Import error:', err);
-      setImportError(err.message);
+    }
+    
+    if (allPlacements.length > 0) {
+      setDetectedChannel(lastChannel);
+      setDetectedPublisher(lastPublisher);
+      setPublisherSpecs(lastSpecs);
+      setParsedPlacements(allPlacements);
+      setSelectedImports(new Set(allPlacements.map(p => p._importId)));
+    } else if (!importError) {
+      setImportError('No placements found in uploaded files.');
     }
     
     setImporting(false);
@@ -947,6 +958,7 @@ export default function NewBrief() {
                     accept=".xlsx,.xls,.csv,.pdf"
                     onChange={handleFileUpload}
                     className="hidden"
+                    multiple
                   />
                   <button
                     onClick={() => importFileRef.current?.click()}
