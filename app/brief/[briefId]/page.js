@@ -223,7 +223,7 @@ function DueBarChart({ specs, onWeekClick, selectedWeek }) {
 // ============================================
 // SPEC CARD WITH EDIT MODE
 // ============================================
-function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlacementEdit, onPlacementDelete, onDeleteCard, attachments, specNote, onSpecNoteChange, briefId, mergeTargets, onMerge }) {
+function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlacementEdit, onPlacementDelete, onDeleteCard, attachments, specNote, onSpecNoteChange, briefId, mergeTargets, onMerge, showBulkSelect, isSelected, onToggleSelect }) {
   const [editingPlacement, setEditingPlacement] = useState(null);
   const [editValues, setEditValues] = useState({});
   const [editingNote, setEditingNote] = useState(false);
@@ -325,8 +325,13 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlace
   return (
     <div className={`bg-white/5 rounded-2xl border border-white/10 overflow-hidden transition-all hover:bg-white/[0.07] ${urgencyClass} ${urgencyGlow}`}>
       {/* Card Header */}
-      <div className="p-4 cursor-pointer" onClick={() => onExpand(spec.id)}>
+      <div className="p-4 cursor-pointer" onClick={() => showBulkSelect ? onToggleSelect(spec.id) : onExpand(spec.id)}>
         <div className="flex items-start gap-4">
+          {showBulkSelect && (
+            <div className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 mt-1 transition-colors ${isSelected ? 'bg-sunny-yellow border-sunny-yellow' : 'border-white/20 hover:border-white/40'}`}>
+              {isSelected && <span className="text-black text-xs font-bold">✓</span>}
+            </div>
+          )}
           <DimensionPreview dimensions={spec.label} channel={channel} />
           <div className="flex-1 min-w-0">
             <div className="font-semibold text-white">{spec.label}</div>
@@ -956,6 +961,8 @@ export default function BriefPage() {
   const [viewMode, setViewMode] = useState('cards');
   const [sortBy, setSortBy] = useState('default'); // 'default' | 'due' | 'status' | 'publisher'
   const [channelFilter, setChannelFilter] = useState(null); // null = all
+  const [selectedSpecs, setSelectedSpecs] = useState(new Set());
+  const [showBulkBar, setShowBulkBar] = useState(false);
   const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved'
   const saveTimerRef = useRef(null);
 
@@ -1153,6 +1160,22 @@ export default function BriefPage() {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ groupId: specId, status: newStatus }),
     }));
+  }
+
+  function toggleSpecSelection(specId) {
+    setSelectedSpecs(prev => {
+      const next = new Set(prev);
+      next.has(specId) ? next.delete(specId) : next.add(specId);
+      return next;
+    });
+  }
+
+  async function bulkStatusChange(newStatus) {
+    for (const specId of selectedSpecs) {
+      await handleStatusChange(specId, newStatus);
+    }
+    setSelectedSpecs(new Set());
+    setShowBulkBar(false);
   }
 
   async function handleDueDateBufferChange(newBuffer) {
@@ -1585,6 +1608,10 @@ export default function BriefPage() {
               <option value="status">Sort: Status</option>
               <option value="publisher">Sort: Publisher</option>
             </select>
+            <button onClick={() => { setShowBulkBar(!showBulkBar); if (showBulkBar) setSelectedSpecs(new Set()); }}
+              className={`text-xs px-2.5 py-1.5 rounded-lg transition-colors ${showBulkBar ? 'bg-sunny-yellow/20 text-sunny-yellow border border-sunny-yellow/30' : 'bg-white/5 text-white/40 border border-white/10 hover:text-white/60'}`}>
+              ☑ Select
+            </button>
           </div>
         )}
 
@@ -1597,7 +1624,7 @@ export default function BriefPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/10 text-left text-xs text-white/40">
-                  <th className="px-4 py-3 font-medium w-8"></th>
+                  <th className="px-4 py-3 font-medium w-8">{showBulkBar ? '' : ''}</th>
                   <th className="px-4 py-3 font-medium">Channel</th>
                   <th className="px-4 py-3 font-medium">Spec</th>
                   <th className="px-4 py-3 font-medium">Publisher</th>
@@ -1616,8 +1643,16 @@ export default function BriefPage() {
                     const statusStep = STATUS_STEPS.findIndex(s => s.key === (spec.placements[0]?.status || 'briefed'));
                     const isExp = expandedSpecs.has(spec.id);
                     const rows = [(
-                      <tr key={spec.id} className="hover:bg-white/[0.03] cursor-pointer" onClick={() => toggleSpecExpanded(spec.id)}>
-                        <td className="px-4 py-3 text-white/30 text-xs"><span className={`inline-block transition-transform ${isExp ? 'rotate-90' : ''}`}>▶</span></td>
+                      <tr key={spec.id} className={`hover:bg-white/[0.03] cursor-pointer ${isExp ? 'bg-white/[0.02]' : ''}`} onClick={() => showBulkBar ? toggleSpecSelection(spec.id) : toggleSpecExpanded(spec.id)}>
+                        <td className="px-4 py-3 text-white/30 text-xs">
+                          {showBulkBar ? (
+                            <div className={`w-4 h-4 rounded border-2 flex items-center justify-center ${selectedSpecs.has(spec.id) ? 'bg-sunny-yellow border-sunny-yellow' : 'border-white/20'}`}>
+                              {selectedSpecs.has(spec.id) && <span className="text-black text-[10px] font-bold">✓</span>}
+                            </div>
+                          ) : (
+                            <span className={`inline-block transition-transform ${isExp ? 'rotate-90' : ''}`}>▶</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3"><span className="mr-1.5">{config.icon}</span><span className="text-white/60">{config.name}</span></td>
                         <td className="px-4 py-3 font-medium">{spec.label}</td>
                         <td className="px-4 py-3 text-white/60">{spec.publisher || '—'}</td>
@@ -1728,7 +1763,8 @@ export default function BriefPage() {
                         onPlacementEdit={handlePlacementEdit} onPlacementDelete={handlePlacementDelete}
                         onDeleteCard={handleDeleteCard} attachments={brief.attachments}
                         specNote={specNotes[spec.id]} onSpecNoteChange={handleSpecNoteChange} briefId={briefId}
-                        mergeTargets={mergeTargets} onMerge={handleMergeSpecs} />
+                        mergeTargets={mergeTargets} onMerge={handleMergeSpecs}
+                        showBulkSelect={showBulkBar} isSelected={selectedSpecs.has(spec.id)} onToggleSelect={toggleSpecSelection} />
                     );
                   })}
                 </div>
@@ -1747,6 +1783,24 @@ export default function BriefPage() {
           </div>
         )}
       </div>
+
+      {/* Bulk Action Bar */}
+      {showBulkBar && selectedSpecs.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-sunny-dark/95 border border-white/20 rounded-2xl px-6 py-3 flex items-center gap-4 shadow-2xl backdrop-blur">
+          <span className="text-sm font-medium">{selectedSpecs.size} selected</span>
+          <div className="w-px h-6 bg-white/10" />
+          <span className="text-xs text-white/40">Set status:</span>
+          {STATUS_STEPS.map(step => (
+            <button key={step.key} onClick={() => bulkStatusChange(step.key)}
+              className="text-xs px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white/60 hover:text-sunny-yellow hover:border-sunny-yellow/30 transition-colors">
+              {step.label}
+            </button>
+          ))}
+          <div className="w-px h-6 bg-white/10" />
+          <button onClick={() => { setSelectedSpecs(new Set()); setShowBulkBar(false); }}
+            className="text-xs text-white/30 hover:text-white">Cancel</button>
+        </div>
+      )}
 
       {/* Modals */}
       <AddPlacementModal isOpen={showAddModal} onClose={() => setShowAddModal(false)}
