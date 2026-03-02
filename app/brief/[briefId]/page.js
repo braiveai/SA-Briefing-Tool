@@ -963,7 +963,6 @@ export default function BriefPage() {
   const [brief, setBrief] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expandedSpecs, setExpandedSpecs] = useState(new Set());
-  const [copySuccess, setCopySuccess] = useState(false);
   const [dueDateBuffer, setDueDateBuffer] = useState(5);
   const [publisherLeadTimes, setPublisherLeadTimes] = useState({});
   const [selectedWeek, setSelectedWeek] = useState(null);
@@ -978,6 +977,7 @@ export default function BriefPage() {
   const [channelFilter, setChannelFilter] = useState(null); // null = all
   const [selectedSpecs, setSelectedSpecs] = useState(new Set());
   const [showBulkBar, setShowBulkBar] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved'
   const saveTimerRef = useRef(null);
 
@@ -1347,8 +1347,9 @@ export default function BriefPage() {
   function copyClientLink() {
     const url = `${window.location.origin}/brief/${briefId}/client`;
     navigator.clipboard.writeText(url);
-    setCopySuccess(true);
-    setTimeout(() => setCopySuccess(false), 2000);
+    setSaveStatus('copied');
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
   }
 
   function getClientSlug() {
@@ -1432,29 +1433,39 @@ export default function BriefPage() {
               <button onClick={() => setShowAddModal(true)} className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Add placement">
                 + Add
               </button>
-              <button onClick={() => setShowRefModal(true)} className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Add reference document">
-                📎
-              </button>
-              <button onClick={copyClientLink}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${copySuccess ? 'bg-green-500 text-white' : 'bg-white/5 border border-white/10 hover:bg-white/10'}`}>
-                {copySuccess ? '✓ Copied!' : '🔗 Client Link'}
-              </button>
-              <button onClick={() => window.open(`/client/${getClientSlug()}`, '_blank')}
-                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Client portal — all briefs for this client (opens new tab)">
-                🏠 Portal
-              </button>
-              <button onClick={() => window.open(`/brief/${briefId}/print`, '_blank')}
-                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10 transition-colors" title="Export as PDF (print-friendly view)">
-                📄 PDF
-              </button>
-              <button onClick={handleDuplicateBrief}
-                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10 transition-colors" title="Duplicate this brief">
-                📋 Clone
-              </button>
-              <button onClick={handleDeleteBrief}
-                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10 hover:text-red-400 hover:border-red-400/30 transition-colors" title="Delete this brief">
-                🗑
-              </button>
+              <div className="relative">
+                <button onClick={() => setShowMoreMenu(!showMoreMenu)} className={`px-3 py-2 bg-white/5 border rounded-lg text-sm hover:bg-white/10 transition-colors ${showMoreMenu ? 'border-white/30' : 'border-white/10'}`} title="More actions">
+                  ⋯
+                </button>
+                {showMoreMenu && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowMoreMenu(false)} />
+                    <div className="absolute right-0 top-full mt-1 z-50 bg-[#1e1e1e] border border-white/15 rounded-xl shadow-2xl py-1 min-w-[180px]">
+                      <button onClick={() => { setShowRefModal(true); setShowMoreMenu(false); }}
+                        className="w-full px-4 py-2.5 text-left text-sm hover:bg-white/5 flex items-center gap-2.5">
+                        <span className="text-base">📎</span> Add Reference Doc
+                      </button>
+                      <button onClick={() => { window.open(`/brief/${briefId}/print`, '_blank'); setShowMoreMenu(false); }}
+                        className="w-full px-4 py-2.5 text-left text-sm hover:bg-white/5 flex items-center gap-2.5">
+                        <span className="text-base">📄</span> Export PDF
+                      </button>
+                      <button onClick={() => { handleDuplicateBrief(); setShowMoreMenu(false); }}
+                        className="w-full px-4 py-2.5 text-left text-sm hover:bg-white/5 flex items-center gap-2.5">
+                        <span className="text-base">📋</span> Clone Brief
+                      </button>
+                      <button onClick={() => { copyClientLink(); setShowMoreMenu(false); }}
+                        className="w-full px-4 py-2.5 text-left text-sm hover:bg-white/5 flex items-center gap-2.5">
+                        <span className="text-base">🔗</span> Copy Client Link
+                      </button>
+                      <div className="border-t border-white/10 my-1" />
+                      <button onClick={() => { handleDeleteBrief(); setShowMoreMenu(false); }}
+                        className="w-full px-4 py-2.5 text-left text-sm hover:bg-white/5 flex items-center gap-2.5 text-red-400">
+                        <span className="text-base">🗑</span> Delete Brief
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
               <button onClick={() => window.open(`/brief/${briefId}/client`, '_blank')}
                 className="px-4 py-2 bg-sunny-yellow text-black rounded-lg text-sm font-semibold hover:bg-yellow-300">
                 Preview ↗
@@ -1599,6 +1610,7 @@ export default function BriefPage() {
             <div className={`text-xs transition-opacity duration-300 ${saveStatus === 'idle' ? 'opacity-0' : 'opacity-100'}`}>
               {saveStatus === 'saving' && <span className="text-white/40">Saving...</span>}
               {saveStatus === 'saved' && <span className="text-green-400">✓ Saved</span>}
+              {saveStatus === 'copied' && <span className="text-green-400">✓ Link copied</span>}
             </div>
             <label className="flex items-center gap-2 text-xs text-white/40 cursor-pointer select-none">
               <div className={`w-8 h-4 rounded-full transition-colors relative ${viewMode === 'table' ? 'bg-sunny-yellow/50' : 'bg-white/10'}`}
