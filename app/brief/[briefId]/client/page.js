@@ -62,20 +62,24 @@ function DimensionPreview({ dimensions, channel }) {
 
 function StatusDisplay({ currentStatus }) {
   const currentIndex = STATUS_STEPS.findIndex(s => s.key === currentStatus);
+  const currentLabel = STATUS_STEPS[currentIndex]?.label || 'Briefed';
   const [hoveredIndex, setHoveredIndex] = useState(null);
   return (
-    <div className="flex items-center gap-1">
-      {STATUS_STEPS.map((step, idx) => {
-        const isFilled = idx <= currentIndex;
-        const showLabel = hoveredIndex === idx;
-        return (
-          <div key={step.key} className="relative">
-            <div onMouseEnter={() => setHoveredIndex(idx)} onMouseLeave={() => setHoveredIndex(null)}
-              className={`w-3 h-3 rounded-full transition-all ${isFilled ? 'bg-sunny-yellow' : 'bg-white/20'} ${showLabel ? 'scale-125' : ''}`} />
-            {showLabel && <div className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-black rounded text-xs whitespace-nowrap z-10 border border-white/10">{step.label}</div>}
-          </div>
-        );
-      })}
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1">
+        {STATUS_STEPS.map((step, idx) => {
+          const isFilled = idx <= currentIndex;
+          const showLabel = hoveredIndex === idx;
+          return (
+            <div key={step.key} className="relative">
+              <div onMouseEnter={() => setHoveredIndex(idx)} onMouseLeave={() => setHoveredIndex(null)}
+                className={`w-3 h-3 rounded-full transition-all ${isFilled ? 'bg-sunny-yellow' : 'bg-white/20'} ${showLabel ? 'scale-125' : ''}`} />
+              {showLabel && <div className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-black rounded text-xs whitespace-nowrap z-10 border border-white/10">{step.label}</div>}
+            </div>
+          );
+        })}
+      </div>
+      <span className="text-xs text-white/40">{currentLabel}</span>
     </div>
   );
 }
@@ -116,7 +120,10 @@ function DueBarChart({ specs, onWeekClick, selectedWeek }) {
   return (
     <div className="bg-white/5 border border-white/10 rounded-2xl p-6 mb-8">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold">Creatives Due by Week</h3>
+        <div>
+          <h3 className="font-semibold">Creatives Due by Week</h3>
+          <p className="text-xs text-white/40 mt-0.5">When your creative files are needed, based on flight start dates</p>
+        </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-white/40">Click a bar to filter</span>
           {selectedWeek && <button onClick={() => onWeekClick(null)} className="text-xs text-sunny-yellow hover:underline">Clear filter</button>}
@@ -512,8 +519,8 @@ export default function ClientBriefPage() {
           </div>
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5 relative group">
             <div className="text-4xl font-bold text-amber-400">{stats.dueSoon}</div>
-            <div className="text-sm text-white/60 mt-1">Due Soon</div>
-            <div className="hidden group-hover:block absolute -top-10 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-black rounded-lg text-xs text-white/80 whitespace-nowrap z-10 border border-white/10">Due within the next 7 days</div>
+            <div className="text-sm text-white/60 mt-1">Due ≤ 7 days</div>
+            <div className="hidden group-hover:block absolute -top-10 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-black rounded-lg text-xs text-white/80 whitespace-nowrap z-10 border border-white/10">Creatives with due dates in the next 7 days</div>
           </div>
         </div>
         <DueBarChart specs={allSpecs} onWeekClick={setSelectedWeek} selectedWeek={selectedWeek} />

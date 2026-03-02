@@ -138,22 +138,26 @@ function DimensionPreview({ dimensions, channel }) {
 // ============================================
 function StatusTrack({ currentStatus, onChange, groupId }) {
   const currentIndex = STATUS_STEPS.findIndex(s => s.key === currentStatus);
+  const currentLabel = STATUS_STEPS[currentIndex]?.label || 'Briefed';
   const [hoveredIndex, setHoveredIndex] = useState(null);
   
   return (
-    <div className="flex items-center gap-1">
-      {STATUS_STEPS.map((step, idx) => {
-        const isFilled = idx <= currentIndex;
-        const isHovered = hoveredIndex !== null && idx <= hoveredIndex;
-        const showLabel = hoveredIndex === idx;
-        return (
-          <div key={step.key} className="relative">
-            <button onClick={() => onChange(groupId, step.key)} onMouseEnter={() => setHoveredIndex(idx)} onMouseLeave={() => setHoveredIndex(null)}
-              className={`w-3 h-3 rounded-full transition-all duration-200 ${isFilled ? 'bg-sunny-yellow' : isHovered ? 'bg-sunny-yellow/50' : 'bg-white/20'} ${isHovered ? 'scale-125' : ''}`} />
-            {showLabel && <div className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-black rounded text-xs whitespace-nowrap z-10">{step.label}</div>}
-          </div>
-        );
-      })}
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1">
+        {STATUS_STEPS.map((step, idx) => {
+          const isFilled = idx <= currentIndex;
+          const isHovered = hoveredIndex !== null && idx <= hoveredIndex;
+          const showLabel = hoveredIndex === idx;
+          return (
+            <div key={step.key} className="relative">
+              <button onClick={() => onChange(groupId, step.key)} onMouseEnter={() => setHoveredIndex(idx)} onMouseLeave={() => setHoveredIndex(null)}
+                className={`w-3 h-3 rounded-full transition-all duration-200 ${isFilled ? 'bg-sunny-yellow' : isHovered ? 'bg-sunny-yellow/50' : 'bg-white/20'} ${isHovered ? 'scale-125' : ''}`} />
+              {showLabel && <div className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-black rounded text-xs whitespace-nowrap z-10">{step.label}</div>}
+            </div>
+          );
+        })}
+      </div>
+      <span className="text-xs text-white/40">{hoveredIndex !== null ? STATUS_STEPS[hoveredIndex]?.label : currentLabel}</span>
     </div>
   );
 }
@@ -183,7 +187,10 @@ function DueBarChart({ specs, onWeekClick, selectedWeek }) {
   return (
     <div className="bg-white/5 border border-white/10 rounded-2xl p-6 mb-8">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold">Creatives Due</h3>
+        <div>
+          <h3 className="font-semibold">Creatives Due</h3>
+          <p className="text-xs text-white/40 mt-0.5">When creative files need to be ready, based on flight dates minus publisher lead times</p>
+        </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-white/40">Click a bar to filter by week</span>
           {selectedWeek && <button onClick={() => onWeekClick(null)} className="text-xs text-sunny-yellow hover:underline">Clear filter</button>}
@@ -1581,7 +1588,7 @@ export default function BriefPage() {
               { value: stats.totalCreatives, label: 'Creatives', color: 'text-sunny-yellow' },
               { value: stats.totalPlacements, label: 'Placements', color: 'text-white' },
               { value: stats.completed, label: 'Completed', color: 'text-green-400' },
-              { value: stats.dueSoon, label: 'Due Soon', color: 'text-amber-400', tooltip: 'Due within the next 7 days' },
+              { value: stats.dueSoon, label: 'Due ≤ 7d', color: 'text-amber-400', tooltip: 'Creatives with due dates in the next 7 days' },
             ].map(s => (
               <div key={s.label} className="relative group">
                 <span className={`text-2xl font-bold ${s.color}`}>{s.value}</span>
