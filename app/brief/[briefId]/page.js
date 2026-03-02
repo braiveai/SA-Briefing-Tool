@@ -1341,17 +1341,17 @@ export default function BriefPage() {
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${copySuccess ? 'bg-green-500 text-white' : 'bg-white/5 border border-white/10 hover:bg-white/10'}`}>
                 {copySuccess ? '✓ Copied!' : '🔗 Client Link'}
               </button>
-              <button onClick={() => router.push(`/client/${getClientSlug()}`)}
-                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Client portal — all briefs for this client">
+              <button onClick={() => window.open(`/client/${getClientSlug()}`, '_blank')}
+                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Client portal — all briefs for this client (opens new tab)">
                 🏠 Portal
               </button>
               <button onClick={handleDeleteBrief}
                 className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10 hover:text-red-400 hover:border-red-400/30 transition-colors" title="Delete this brief">
                 🗑
               </button>
-              <button onClick={() => router.push(`/brief/${briefId}/client`)}
+              <button onClick={() => window.open(`/brief/${briefId}/client`, '_blank')}
                 className="px-4 py-2 bg-sunny-yellow text-black rounded-lg text-sm font-semibold hover:bg-yellow-300">
-                Preview →
+                Preview ↗
               </button>
             </div>
           </div>
