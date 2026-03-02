@@ -949,6 +949,8 @@ export default function BriefPage() {
   const [specNotes, setSpecNotes] = useState({});
   const [editingBestPractices, setEditingBestPractices] = useState(false);
   const [bestPracticesText, setBestPracticesText] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'table'
 
   const briefId = params.briefId || params.id;
 
@@ -1317,6 +1319,9 @@ export default function BriefPage() {
               </div>
             </div>
             <div className="flex items-center gap-3">
+              <button onClick={() => setShowSettings(!showSettings)} className={`px-3 py-2 border rounded-lg text-sm hover:bg-white/10 transition-colors ${showSettings ? 'bg-white/10 border-sunny-yellow/50 text-sunny-yellow' : 'bg-white/5 border-white/10'}`} title="Brief settings">
+                ⚙️
+              </button>
               <button onClick={() => setShowAddModal(true)} className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Add placement">
                 + Add
               </button>
@@ -1343,111 +1348,172 @@ export default function BriefPage() {
       <div className="max-w-6xl mx-auto px-6 py-8">
         {/* Reference Docs Banner */}
         {brief.attachments?.length > 0 && (
-          <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4 mb-6">
+          <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-3 mb-6">
             <div className="flex items-center gap-2 text-sm">
               <span className="text-blue-400">📎</span>
-              <span className="text-blue-400 font-medium">Reference Documents:</span>
               {brief.attachments.map((att, i) => (
-                <a key={i} href={att.url} target="_blank" rel="noopener noreferrer" className="text-blue-300 hover:text-blue-200 underline">
-                  {att.name}
-                  {att.publisher && <span className="text-blue-400/50 ml-1">({att.publisher})</span>}
+                <a key={i} href={att.url} target="_blank" rel="noopener noreferrer" className="text-blue-300 hover:text-blue-200 underline text-xs">
+                  {att.name}{att.publisher && <span className="text-blue-400/50 ml-1">({att.publisher})</span>}
                 </a>
               ))}
             </div>
           </div>
         )}
 
-        {/* Best Practices / Creative Recommendations */}
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <span>💡</span>
-              <span className="text-sm font-medium">Creative Recommendations & Best Practices</span>
-            </div>
-            {!editingBestPractices && (
-              <button onClick={() => { setEditingBestPractices(true); setBestPracticesText(brief.bestPractices || ''); }}
-                className="text-xs text-white/30 hover:text-sunny-yellow">{brief.bestPractices ? 'Edit' : '+ Add'}</button>
-            )}
-          </div>
-          {editingBestPractices ? (
+        {/* Settings Drawer */}
+        {showSettings && (
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-6 space-y-5">
+            {/* Lead Times */}
             <div>
-              <textarea value={bestPracticesText} onChange={e => setBestPracticesText(e.target.value)}
-                rows={4} placeholder="Add creative recommendations, best practices, or guidelines for this campaign..."
-                className="w-full bg-black/30 border border-white/10 rounded-lg p-3 text-sm text-white placeholder-white/30 focus:border-sunny-yellow/50 focus:outline-none resize-y" />
-              <div className="flex justify-end gap-2 mt-2">
-                <button onClick={() => setEditingBestPractices(false)} className="text-xs text-white/30 hover:text-white px-3 py-1">Cancel</button>
-                <button onClick={async () => {
-                  setBrief(prev => prev ? { ...prev, bestPractices: bestPracticesText } : prev);
-                  setEditingBestPractices(false);
-                  await fetch(`/api/brief/${briefId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bestPractices: bestPracticesText }) });
-                }} className="text-xs bg-sunny-yellow/20 text-sunny-yellow px-3 py-1 rounded hover:bg-sunny-yellow/30">Save</button>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">Creative Lead Times</span>
+                  <span className="text-xs text-white/40">(days before flight start)</span>
+                </div>
+                <div className="flex items-center gap-4">
+                  <label className="text-xs text-white/40">Default:</label>
+                  <input type="range" min="1" max="21" value={dueDateBuffer} onChange={(e) => handleDueDateBufferChange(parseInt(e.target.value))} className="accent-sunny-yellow w-24" />
+                  <span className="text-xs font-medium text-sunny-yellow w-14 text-right">{dueDateBuffer} days</span>
+                </div>
               </div>
+              {uniquePublishers.length > 0 && (
+                <div className="grid grid-cols-2 gap-3">
+                  {uniquePublishers.map(pub => {
+                    const pubKey = pub.toLowerCase();
+                    const currentVal = publisherLeadTimes[pubKey] ?? dueDateBuffer;
+                    const isDefault = !(pubKey in publisherLeadTimes) || publisherLeadTimes[pubKey] === dueDateBuffer;
+                    return (
+                      <div key={pub} className="flex items-center gap-3">
+                        <span className="text-sm text-white/70 w-32 truncate" title={pub}>{pub}</span>
+                        <input type="range" min="1" max="21" value={currentVal}
+                          onChange={(e) => handlePublisherLeadTimeChange(pubKey, parseInt(e.target.value))}
+                          className="flex-1 accent-sunny-yellow" />
+                        <span className={`text-xs w-16 text-right ${isDefault ? 'text-white/40' : 'text-sunny-yellow font-medium'}`}>{currentVal} days</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          ) : brief.bestPractices ? (
-            <div className="text-sm text-white/70 whitespace-pre-wrap">{brief.bestPractices}</div>
-          ) : (
-            <p className="text-sm text-white/30 italic">No creative recommendations added yet.</p>
-          )}
-        </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-4 gap-4 mb-8">
-          <div className="bg-gradient-to-br from-sunny-yellow/20 to-sunny-yellow/5 border border-sunny-yellow/20 rounded-2xl p-5">
-            <div className="text-4xl font-bold text-sunny-yellow">{stats.totalCreatives}</div>
-            <div className="text-sm text-white/60 mt-1">Unique Creatives</div>
-          </div>
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
-            <div className="text-4xl font-bold">{stats.totalPlacements}</div>
-            <div className="text-sm text-white/60 mt-1">Total Placements</div>
-          </div>
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
-            <div className="text-4xl font-bold text-green-400">{stats.completed}</div>
-            <div className="text-sm text-white/60 mt-1">Completed</div>
-          </div>
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-5 relative group">
-            <div className="text-4xl font-bold text-amber-400">{stats.dueSoon}</div>
-            <div className="text-sm text-white/60 mt-1">Due Soon</div>
-            <div className="hidden group-hover:block absolute -top-10 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-black rounded-lg text-xs text-white/80 whitespace-nowrap z-10 border border-white/10">Due within the next 7 days</div>
-          </div>
-        </div>
-
-        {/* Lead Time Settings */}
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-8">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium">Creative Lead Times</span>
-              <span className="text-xs text-white/40">(days before flight start)</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <label className="text-xs text-white/40">Default:</label>
-              <input type="range" min="1" max="21" value={dueDateBuffer} onChange={(e) => handleDueDateBufferChange(parseInt(e.target.value))} className="accent-sunny-yellow w-24" />
-              <span className="text-xs font-medium text-sunny-yellow w-14 text-right">{dueDateBuffer} days</span>
-            </div>
-          </div>
-          {uniquePublishers.length > 0 && (
-            <div className="mt-3 pt-3 border-t border-white/10 grid grid-cols-2 gap-3">
-              {uniquePublishers.map(pub => {
-                const pubKey = pub.toLowerCase();
-                const currentVal = publisherLeadTimes[pubKey] ?? dueDateBuffer;
-                const isDefault = !(pubKey in publisherLeadTimes) || publisherLeadTimes[pubKey] === dueDateBuffer;
-                return (
-                  <div key={pub} className="flex items-center gap-3">
-                    <span className="text-sm text-white/70 w-32 truncate" title={pub}>{pub}</span>
-                    <input type="range" min="1" max="21" value={currentVal}
-                      onChange={(e) => handlePublisherLeadTimeChange(pubKey, parseInt(e.target.value))}
-                      className="flex-1 accent-sunny-yellow" />
-                    <span className={`text-xs w-16 text-right ${isDefault ? 'text-white/40' : 'text-sunny-yellow font-medium'}`}>{currentVal} days</span>
+            {/* Best Practices */}
+            <div className="pt-4 border-t border-white/10">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span>💡</span>
+                  <span className="text-sm font-medium">Creative Recommendations</span>
+                </div>
+                {!editingBestPractices && (
+                  <button onClick={() => { setEditingBestPractices(true); setBestPracticesText(brief.bestPractices || ''); }}
+                    className="text-xs text-white/30 hover:text-sunny-yellow">{brief.bestPractices ? 'Edit' : '+ Add'}</button>
+                )}
+              </div>
+              {editingBestPractices ? (
+                <div>
+                  <textarea value={bestPracticesText} onChange={e => setBestPracticesText(e.target.value)}
+                    rows={3} placeholder="Creative recommendations, best practices, guidelines..."
+                    className="w-full bg-black/30 border border-white/10 rounded-lg p-3 text-sm text-white placeholder-white/30 focus:border-sunny-yellow/50 focus:outline-none resize-y" />
+                  <div className="flex justify-end gap-2 mt-2">
+                    <button onClick={() => setEditingBestPractices(false)} className="text-xs text-white/30 hover:text-white px-3 py-1">Cancel</button>
+                    <button onClick={async () => {
+                      setBrief(prev => prev ? { ...prev, bestPractices: bestPracticesText } : prev);
+                      setEditingBestPractices(false);
+                      await fetch(`/api/brief/${briefId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bestPractices: bestPracticesText }) });
+                    }} className="text-xs bg-sunny-yellow/20 text-sunny-yellow px-3 py-1 rounded hover:bg-sunny-yellow/30">Save</button>
                   </div>
-                );
-              })}
+                </div>
+              ) : brief.bestPractices ? (
+                <div className="text-sm text-white/70 whitespace-pre-wrap">{brief.bestPractices}</div>
+              ) : (
+                <p className="text-sm text-white/30 italic">No creative recommendations added yet.</p>
+              )}
             </div>
-          )}
+          </div>
+        )}
+
+        {/* Compact Stats + View Toggle */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-6">
+            {[
+              { value: stats.totalCreatives, label: 'Creatives', color: 'text-sunny-yellow' },
+              { value: stats.totalPlacements, label: 'Placements', color: 'text-white' },
+              { value: stats.completed, label: 'Completed', color: 'text-green-400' },
+              { value: stats.dueSoon, label: 'Due Soon', color: 'text-amber-400', tooltip: 'Due within the next 7 days' },
+            ].map(s => (
+              <div key={s.label} className="relative group">
+                <span className={`text-2xl font-bold ${s.color}`}>{s.value}</span>
+                <span className="text-xs text-white/40 ml-1.5">{s.label}</span>
+                {s.tooltip && <div className="hidden group-hover:block absolute -top-8 left-0 px-2 py-1 bg-black rounded text-xs text-white/80 whitespace-nowrap z-10 border border-white/10">{s.tooltip}</div>}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-2 text-xs text-white/40 cursor-pointer select-none">
+              <div className={`w-8 h-4 rounded-full transition-colors relative ${viewMode === 'table' ? 'bg-sunny-yellow/50' : 'bg-white/10'}`}
+                onClick={() => setViewMode(v => v === 'cards' ? 'table' : 'cards')}>
+                <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${viewMode === 'table' ? 'left-4' : 'left-0.5'}`} />
+              </div>
+              Table view
+            </label>
+          </div>
         </div>
 
         {/* Due Bar Chart */}
         <DueBarChart specs={allSpecs} onWeekClick={setSelectedWeek} selectedWeek={selectedWeek} />
 
-        {/* Creative Requirements by Channel */}
+        {/* TABLE VIEW */}
+        {viewMode === 'table' ? (
+          <div className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/10 text-left text-xs text-white/40">
+                  <th className="px-4 py-3 font-medium">Channel</th>
+                  <th className="px-4 py-3 font-medium">Spec</th>
+                  <th className="px-4 py-3 font-medium">Publisher</th>
+                  <th className="px-4 py-3 font-medium text-center">Placements</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Due</th>
+                  <th className="px-4 py-3 font-medium">Note</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {Object.entries(filteredChannelData).flatMap(([channelKey, channel]) =>
+                  Object.values(channel.specs).map(spec => {
+                    const config = CHANNELS[channelKey] || CHANNELS.ooh;
+                    const dueDate = spec.earliestDue;
+                    const daysLeft = dueDate ? Math.ceil((new Date(dueDate) - new Date()) / (1000*60*60*24)) : null;
+                    const statusStep = STATUS_STEPS.findIndex(s => s.key === (spec.placements[0]?.status || 'briefed'));
+                    return (
+                      <tr key={spec.id} className="hover:bg-white/[0.03] cursor-pointer" onClick={() => toggleSpecExpanded(spec.id)}>
+                        <td className="px-4 py-3"><span className="mr-1.5">{config.icon}</span>{config.name}</td>
+                        <td className="px-4 py-3 font-medium">{spec.label}</td>
+                        <td className="px-4 py-3 text-white/60">{spec.publisher || '—'}</td>
+                        <td className="px-4 py-3 text-center">{spec.placements.length}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1">
+                            {STATUS_STEPS.map((step, i) => (
+                              <div key={step.key} className={`w-2 h-2 rounded-full ${i <= statusStep ? 'bg-sunny-yellow' : 'bg-white/10'}`} title={step.label} />
+                            ))}
+                            <span className="text-xs text-white/40 ml-1.5">{STATUS_STEPS[statusStep]?.label || 'Briefed'}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          {dueDate ? (
+                            <span className={`text-xs font-medium ${daysLeft < 0 ? 'text-red-400' : daysLeft <= 3 ? 'text-red-400' : daysLeft <= 7 ? 'text-amber-400' : 'text-white/50'}`}>
+                              {daysLeft < 0 ? 'Overdue' : daysLeft === 0 ? 'Today' : `${daysLeft}d`}
+                            </span>
+                          ) : <span className="text-white/20">—</span>}
+                        </td>
+                        <td className="px-4 py-3 text-white/40 text-xs max-w-[150px] truncate">{specNotes[spec.id] || '—'}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+        /* CARD VIEW */
         <div className="space-y-10">
           {Object.entries(filteredChannelData).map(([channelKey, channel]) => {
             const config = CHANNELS[channelKey] || CHANNELS.ooh;
@@ -1461,7 +1527,6 @@ export default function BriefPage() {
                     <p className="text-sm text-white/50">{specs.length} creative{specs.length !== 1 ? 's' : ''} • {channel.totalPlacements} placement{channel.totalPlacements !== 1 ? 's' : ''}</p>
                   </div>
                   {(channelKey === 'radio' || channelKey === 'tv') && specs.length > 1 && (() => {
-                    // Check if there are same-duration specs that could be merged
                     const labels = specs.map(s => s.label);
                     const hasDupes = labels.length !== new Set(labels).size;
                     return hasDupes ? (
@@ -1475,7 +1540,6 @@ export default function BriefPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   {specs.map(spec => {
-                    // For radio/tv, merge targets are other specs with same channel (different timeslot groups with same duration)
                     const mergeTargets = (channelKey === 'radio' || channelKey === 'tv')
                       ? specs.filter(s => s.id !== spec.id && s.label === spec.label).map(s => ({ id: s.id, label: `${s.publisher || 'Unknown'} - ${s.label}` }))
                       : specs.filter(s => s.id !== spec.id).map(s => ({ id: s.id, label: s.label }));
@@ -1493,6 +1557,7 @@ export default function BriefPage() {
             );
           })}
         </div>
+        )}
 
         {Object.keys(filteredChannelData).length === 0 && (
           <div className="text-center py-20">

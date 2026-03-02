@@ -1,4 +1,4 @@
-import { put, list } from '@vercel/blob';
+import { put, list, del } from '@vercel/blob';
 import { NextResponse } from 'next/server';
 
 // GET /api/brief/[briefId]
@@ -160,5 +160,20 @@ export async function PATCH(request, { params }) {
   } catch (error) {
     console.error('Error patching brief:', error);
     return NextResponse.json({ error: 'Failed to update brief' }, { status: 500 });
+  }
+}
+
+// DELETE /api/brief/[briefId]
+export async function DELETE(request, { params }) {
+  try {
+    const { briefId } = await params;
+    const { blobs } = await list({ prefix: `briefs/${briefId}.json` });
+    if (blobs.length > 0) {
+      await del(blobs.map(b => b.url));
+    }
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting brief:', error);
+    return NextResponse.json({ error: 'Failed to delete brief' }, { status: 500 });
   }
 }

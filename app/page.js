@@ -82,6 +82,7 @@ export default function NewBrief() {
   const [loadingBriefs, setLoadingBriefs] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [dashboardFilter, setDashboardFilter] = useState('all');
+  const [expandedClients, setExpandedClients] = useState(new Set());
 
   // Load existing briefs
   useEffect(() => {
@@ -95,6 +96,23 @@ export default function NewBrief() {
     }
     loadBriefs();
   }, []);
+
+  function toggleClient(name) {
+    setExpandedClients(prev => {
+      const next = new Set(prev);
+      next.has(name) ? next.delete(name) : next.add(name);
+      return next;
+    });
+  }
+
+  async function deleteBrief(briefId, e) {
+    e.stopPropagation();
+    if (!confirm('Delete this brief? This cannot be undone.')) return;
+    try {
+      await fetch(`/api/brief/${briefId}`, { method: 'DELETE' });
+      setExistingBriefs(prev => prev.filter(b => b.id !== briefId));
+    } catch (err) { console.error('Failed to delete:', err); }
+  }
 
   // Helper: compute brief stats
   function getBriefStats(brief) {
@@ -587,17 +605,21 @@ export default function NewBrief() {
               )}
             </div>
           ) : (
-            <div className="space-y-4">
-              {clientGroups.map(client => (
+            <div className="space-y-3">
+              {clientGroups.map(client => {
+                const isExpanded = expandedClients.has(client.name);
+                return (
                 <div key={client.name} className="bg-white/[0.03] border border-white/10 rounded-xl overflow-hidden">
-                  {/* Client Header */}
-                  <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
+                  {/* Client Header - Click to expand */}
+                  <div onClick={() => toggleClient(client.name)}
+                    className="px-5 py-4 flex items-center justify-between cursor-pointer hover:bg-white/[0.03] transition-colors">
                     <div className="flex items-center gap-3">
+                      <span className={`text-white/30 text-xs transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
                       <div className="w-9 h-9 bg-gradient-to-br from-sunny-yellow/30 to-sunny-yellow/10 rounded-lg flex items-center justify-center text-sm font-bold text-sunny-yellow">
                         {(client.name[0] || '?').toUpperCase()}
                       </div>
                       <div>
-                        <h2 className="font-semibold text-lg">{client.name}</h2>
+                        <h2 className="font-semibold">{client.name}</h2>
                         <div className="flex items-center gap-3 text-xs text-white/40 mt-0.5">
                           <span>{client.briefs.length} brief{client.briefs.length !== 1 ? 's' : ''}</span>
                           <span>{client.totalPlacements} placement{client.totalPlacements !== 1 ? 's' : ''}</span>
@@ -611,46 +633,50 @@ export default function NewBrief() {
                     </div>
                   </div>
 
-                  {/* Briefs within this client */}
-                  <div className="divide-y divide-white/5">
-                    {client.briefs.map(brief => {
-                      const s = brief._stats;
-                      let urgencyText = ''; let urgencyColor = 'text-white/40';
-                      if (s.daysUntil !== null && s.daysUntil < 0) { urgencyText = 'Overdue'; urgencyColor = 'text-red-400'; }
-                      else if (s.daysUntil !== null && s.daysUntil === 0) { urgencyText = 'Due today'; urgencyColor = 'text-red-400'; }
-                      else if (s.daysUntil !== null && s.daysUntil <= 3) { urgencyText = `${s.daysUntil}d left`; urgencyColor = 'text-red-400'; }
-                      else if (s.daysUntil !== null && s.daysUntil <= 7) { urgencyText = `${s.daysUntil}d left`; urgencyColor = 'text-amber-400'; }
-                      else if (s.daysUntil !== null) { urgencyText = `${s.daysUntil}d left`; urgencyColor = 'text-white/40'; }
+                  {/* Briefs within this client - collapsible */}
+                  {isExpanded && (
+                    <div className="divide-y divide-white/5 border-t border-white/5">
+                      {client.briefs.map(brief => {
+                        const s = brief._stats;
+                        let urgencyText = ''; let urgencyColor = 'text-white/40';
+                        if (s.daysUntil !== null && s.daysUntil < 0) { urgencyText = 'Overdue'; urgencyColor = 'text-red-400'; }
+                        else if (s.daysUntil !== null && s.daysUntil === 0) { urgencyText = 'Due today'; urgencyColor = 'text-red-400'; }
+                        else if (s.daysUntil !== null && s.daysUntil <= 3) { urgencyText = `${s.daysUntil}d left`; urgencyColor = 'text-red-400'; }
+                        else if (s.daysUntil !== null && s.daysUntil <= 7) { urgencyText = `${s.daysUntil}d left`; urgencyColor = 'text-amber-400'; }
+                        else if (s.daysUntil !== null) { urgencyText = `${s.daysUntil}d left`; urgencyColor = 'text-white/40'; }
 
-                      return (
-                        <div key={brief.id} onClick={() => router.push(`/brief/${brief.id}`)}
-                          className="px-5 py-3.5 hover:bg-white/[0.04] cursor-pointer transition-all flex items-center justify-between group">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium truncate">{brief.campaignName || 'Untitled Campaign'}</span>
-                              <div className="flex gap-0.5">
-                                {Array.from(s.channels).map(ch => {
-                                  const cfg = CHANNEL_CONFIG[ch];
-                                  return <span key={ch} className="text-xs" title={cfg?.name || ch}>{cfg?.icon || '📄'}</span>;
-                                })}
+                        return (
+                          <div key={brief.id} onClick={() => router.push(`/brief/${brief.id}`)}
+                            className="px-5 py-3.5 hover:bg-white/[0.04] cursor-pointer transition-all flex items-center justify-between group">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium truncate">{brief.campaignName || 'Untitled Campaign'}</span>
+                                <div className="flex gap-0.5">
+                                  {Array.from(s.channels).map(ch => {
+                                    const cfg = CHANNEL_CONFIG[ch];
+                                    return <span key={ch} className="text-xs" title={cfg?.name || ch}>{cfg?.icon || '📄'}</span>;
+                                  })}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3 text-xs text-white/30 mt-0.5">
+                                <span>{s.creatives} creative{s.creatives !== 1 ? 's' : ''}</span>
+                                <span>{s.placements} placement{s.placements !== 1 ? 's' : ''}</span>
+                                {brief.createdAt && <span>{new Date(brief.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}</span>}
                               </div>
                             </div>
-                            <div className="flex items-center gap-3 text-xs text-white/30 mt-0.5">
-                              <span>{s.creatives} creative{s.creatives !== 1 ? 's' : ''}</span>
-                              <span>{s.placements} placement{s.placements !== 1 ? 's' : ''}</span>
-                              {brief.createdAt && <span>{new Date(brief.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}</span>}
+                            <div className="flex items-center gap-3">
+                              {urgencyText && <span className={`text-xs font-medium ${urgencyColor}`}>{urgencyText}</span>}
+                              <button onClick={(e) => deleteBrief(brief.id, e)}
+                                className="text-white/0 group-hover:text-white/20 hover:!text-red-400 transition-colors text-xs p-1" title="Delete brief">✕</button>
+                              <span className="text-white/15 group-hover:text-white/40 transition-colors">→</span>
                             </div>
                           </div>
-                          <div className="flex items-center gap-3">
-                            {urgencyText && <span className={`text-xs font-medium ${urgencyColor}`}>{urgencyText}</span>}
-                            <span className="text-white/15 group-hover:text-white/40 transition-colors">→</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              ))}
+              );})}
             </div>
           )}
         </div>
