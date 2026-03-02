@@ -1192,7 +1192,6 @@ export default function BriefPage() {
   }
 
   async function handleMergeSpecs(sourceSpecId, targetSpecId) {
-    // Find the target spec to get its label/key
     let targetSpec = null;
     Object.values(channelData).forEach(channel => {
       Object.values(channel.specs).forEach(spec => {
@@ -1200,8 +1199,6 @@ export default function BriefPage() {
       });
     });
     if (!targetSpec) return;
-    
-    // Find all placement IDs in the source spec
     let sourceSpec = null;
     Object.values(channelData).forEach(channel => {
       Object.values(channel.specs).forEach(spec => {
@@ -1209,26 +1206,42 @@ export default function BriefPage() {
       });
     });
     if (!sourceSpec) return;
-    
-    // Update each source placement to match target's specs
     const targetPlacement = targetSpec.placements[0];
     for (const placement of sourceSpec.placements) {
       const updates = {
         publisherName: targetSpec.publisher,
         publisher: targetSpec.publisher?.toLowerCase().replace(/\s+/g, '-'),
       };
-      // Copy dimension/duration from target
-      if (targetPlacement?.specs?.dimensions) {
-        updates.specs = { ...placement.specs, dimensions: targetPlacement.specs.dimensions };
-      }
-      if (targetPlacement?.specs?.adLength) {
-        updates.specs = { ...(updates.specs || placement.specs), adLength: targetPlacement.specs.adLength };
-      }
-      if (targetPlacement?.specs?.spotLength) {
-        updates.specs = { ...(updates.specs || placement.specs), spotLength: targetPlacement.specs.spotLength };
-      }
+      if (targetPlacement?.specs?.dimensions) updates.specs = { ...placement.specs, dimensions: targetPlacement.specs.dimensions };
+      if (targetPlacement?.specs?.adLength) updates.specs = { ...(updates.specs || placement.specs), adLength: targetPlacement.specs.adLength };
+      if (targetPlacement?.specs?.spotLength) updates.specs = { ...(updates.specs || placement.specs), spotLength: targetPlacement.specs.spotLength };
       await handlePlacementEdit(placement.id, updates);
     }
+  }
+
+  // Auto-merge: combine all same-duration specs within a radio/tv channel into one per duration
+  async function handleAutoMergeDurations(channelKey) {
+    const channel = channelData[channelKey];
+    if (!channel) return;
+    const specs = Object.values(channel.specs);
+    // Group by duration label
+    const byLabel = {};
+    specs.forEach(s => {
+      if (!byLabel[s.label]) byLabel[s.label] = [];
+      byLabel[s.label].push(s);
+    });
+    let mergeCount = 0;
+    for (const [label, group] of Object.entries(byLabel)) {
+      if (group.length <= 1) continue;
+      // Keep the first (largest by placement count), merge others into it
+      group.sort((a, b) => b.placements.length - a.placements.length);
+      const target = group[0];
+      for (let i = 1; i < group.length; i++) {
+        await handleMergeSpecs(group[i].id, target.id);
+        mergeCount++;
+      }
+    }
+    if (mergeCount === 0) alert('No same-duration specs to merge.');
   }
 
   async function handleAddPlacements(items) {
@@ -1443,10 +1456,22 @@ export default function BriefPage() {
               <div key={channelKey}>
                 <div className="flex items-center gap-3 mb-5">
                   <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${config.gradient} flex items-center justify-center text-xl shadow-lg`}>{config.icon}</div>
-                  <div>
+                  <div className="flex-1">
                     <h2 className="text-lg font-semibold">{config.name}</h2>
                     <p className="text-sm text-white/50">{specs.length} creative{specs.length !== 1 ? 's' : ''} • {channel.totalPlacements} placement{channel.totalPlacements !== 1 ? 's' : ''}</p>
                   </div>
+                  {(channelKey === 'radio' || channelKey === 'tv') && specs.length > 1 && (() => {
+                    // Check if there are same-duration specs that could be merged
+                    const labels = specs.map(s => s.label);
+                    const hasDupes = labels.length !== new Set(labels).size;
+                    return hasDupes ? (
+                      <button onClick={() => { if (confirm('Merge all same-duration timeslots into single cards?')) handleAutoMergeDurations(channelKey); }}
+                        className="text-xs px-3 py-1.5 bg-amber-500/15 text-amber-400 border border-amber-500/30 rounded-lg hover:bg-amber-500/25 transition-colors"
+                        title="Combine specs with the same duration (e.g. Breakfast 15s + Morning 15s → single 15s card)">
+                        🔗 Merge same durations
+                      </button>
+                    ) : null;
+                  })()}
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   {specs.map(spec => {

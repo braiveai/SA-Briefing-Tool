@@ -81,6 +81,7 @@ export default function NewBrief() {
   const [existingBriefs, setExistingBriefs] = useState([]);
   const [loadingBriefs, setLoadingBriefs] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [dashboardFilter, setDashboardFilter] = useState('all');
 
   // Load existing briefs
   useEffect(() => {
@@ -95,15 +96,68 @@ export default function NewBrief() {
     loadBriefs();
   }, []);
 
-  // Filter briefs by search
-  const filteredBriefs = useMemo(() => {
-    if (!searchQuery.trim()) return existingBriefs;
-    const q = searchQuery.toLowerCase();
-    return existingBriefs.filter(b => 
-      b.clientName?.toLowerCase().includes(q) || 
-      b.campaignName?.toLowerCase().includes(q)
-    );
-  }, [existingBriefs, searchQuery]);
+  // Helper: compute brief stats
+  function getBriefStats(brief) {
+    const items = brief.items || [];
+    const channelSet = new Set(items.map(i => i.channel));
+    const specSet = new Set();
+    items.forEach(i => {
+      const key = (i.channel === 'radio' || i.channel === 'tv')
+        ? (i.specs?.adLength || i.specs?.spotLength || 'unknown')
+        : (i.specs?.dimensions || 'unknown');
+      specSet.add(`${i.channel}-${key}`);
+    });
+    let earliestDue = null; let dueSoonCount = 0; let overdueCount = 0; let completedCount = 0;
+    items.forEach(i => {
+      const due = i.dueDate || (i.flightStart ? (() => {
+        const d = new Date(i.flightStart); d.setDate(d.getDate() - (brief.dueDateBuffer || 5));
+        return d.toISOString().split('T')[0];
+      })() : null);
+      if (due && (!earliestDue || due < earliestDue)) earliestDue = due;
+      const dUntil = due ? Math.ceil((new Date(due) - new Date()) / (1000*60*60*24)) : null;
+      if (dUntil !== null && dUntil < 0) overdueCount++;
+      else if (dUntil !== null && dUntil <= 7) dueSoonCount++;
+      if (i.status === 'delivered' || i.status === 'approved') completedCount++;
+    });
+    const daysUntil = earliestDue ? Math.ceil((new Date(earliestDue) - new Date()) / (1000*60*60*24)) : null;
+    return { channels: channelSet, creatives: specSet.size, placements: items.length, earliestDue, daysUntil, dueSoon: dueSoonCount, overdue: overdueCount, completed: completedCount };
+  }
+
+  // Filter and group briefs by client
+  const { clientGroups, totalStats } = useMemo(() => {
+    let briefs = existingBriefs;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      briefs = briefs.filter(b => b.clientName?.toLowerCase().includes(q) || b.campaignName?.toLowerCase().includes(q));
+    }
+    // Compute stats per brief for filtering
+    const briefsWithStats = briefs.map(b => ({ ...b, _stats: getBriefStats(b) }));
+    // Apply filter
+    let filtered = briefsWithStats;
+    if (dashboardFilter === 'due-soon') filtered = briefsWithStats.filter(b => b._stats.dueSoon > 0);
+    else if (dashboardFilter === 'overdue') filtered = briefsWithStats.filter(b => b._stats.overdue > 0);
+    // Group by client
+    const groups = {};
+    filtered.forEach(b => {
+      const client = b.clientName || 'Unknown Client';
+      if (!groups[client]) groups[client] = { name: client, briefs: [], totalPlacements: 0, totalCreatives: 0, dueSoon: 0, overdue: 0 };
+      groups[client].briefs.push(b);
+      groups[client].totalPlacements += b._stats.placements;
+      groups[client].totalCreatives += b._stats.creatives;
+      groups[client].dueSoon += b._stats.dueSoon;
+      groups[client].overdue += b._stats.overdue;
+    });
+    // Sort clients: overdue first, then due soon, then alphabetical
+    const sorted = Object.values(groups).sort((a, b) => (b.overdue - a.overdue) || (b.dueSoon - a.dueSoon) || a.name.localeCompare(b.name));
+    // Sort briefs within each client by urgency
+    sorted.forEach(g => g.briefs.sort((a, b) => {
+      const da = a._stats.daysUntil ?? 999; const db = b._stats.daysUntil ?? 999;
+      return da - db;
+    }));
+    // Total stats
+    const ts = { clients: sorted.length, briefs: filtered.length, dueSoon: filtered.reduce((s, b) => s + b._stats.dueSoon, 0), overdue: filtered.reduce((s, b) => s + b._stats.overdue, 0) };
+    return { clientGroups: sorted, totalStats: ts };
+  }, [existingBriefs, searchQuery, dashboardFilter]);
   
   // Brief details
   const [clientName, setClientName] = useState('');
@@ -474,27 +528,58 @@ export default function NewBrief() {
         </header>
 
         <div className="max-w-6xl mx-auto px-6 py-8">
-          {/* Search */}
-          <div className="mb-6">
+          {/* Stats Bar */}
+          {!loadingBriefs && existingBriefs.length > 0 && (
+            <div className="grid grid-cols-4 gap-4 mb-6">
+              {[
+                { label: 'Clients', value: totalStats.clients, color: 'border-blue-500/30' },
+                { label: 'Active Briefs', value: totalStats.briefs, color: 'border-white/10' },
+                { label: 'Due Soon', value: totalStats.dueSoon, color: 'border-amber-500/30', warning: true },
+                { label: 'Overdue', value: totalStats.overdue, color: 'border-red-500/30', danger: true },
+              ].map(s => (
+                <div key={s.label} className={`bg-white/5 border ${s.color} rounded-xl p-4 text-center`}>
+                  <div className={`text-2xl font-bold ${s.danger && s.value > 0 ? 'text-red-400' : s.warning && s.value > 0 ? 'text-amber-400' : 'text-sunny-yellow'}`}>{s.value}</div>
+                  <div className="text-xs text-white/50 mt-1">{s.label}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Search + Filters */}
+          <div className="flex items-center gap-3 mb-6">
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search briefs by client or campaign..."
-              className="w-full bg-sunny-gray border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-sunny-yellow"
+              placeholder="Search clients or campaigns..."
+              className="flex-1 bg-sunny-gray border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-sunny-yellow"
             />
+            <div className="flex bg-sunny-gray border border-gray-700 rounded-xl overflow-hidden">
+              {[
+                { key: 'all', label: 'All' },
+                { key: 'due-soon', label: 'Due Soon' },
+                { key: 'overdue', label: 'Overdue' },
+              ].map(f => (
+                <button key={f.key} onClick={() => setDashboardFilter(f.key)}
+                  className={`px-4 py-3 text-sm font-medium transition-colors ${dashboardFilter === f.key ? 'bg-sunny-yellow text-black' : 'text-white/50 hover:text-white'}`}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Briefs List */}
+          {/* Client Groups */}
           {loadingBriefs ? (
             <div className="flex items-center justify-center py-20">
               <div className="animate-spin w-8 h-8 border-2 border-sunny-yellow border-t-transparent rounded-full" />
             </div>
-          ) : filteredBriefs.length === 0 ? (
+          ) : clientGroups.length === 0 ? (
             <div className="text-center py-20">
-              <div className="text-5xl mb-4">{searchQuery ? '🔍' : '📋'}</div>
-              <p className="text-white/50 text-lg mb-4">{searchQuery ? 'No briefs match your search.' : 'No briefs created yet.'}</p>
-              {!searchQuery && (
+              <div className="text-5xl mb-4">{searchQuery || dashboardFilter !== 'all' ? '🔍' : '📋'}</div>
+              <p className="text-white/50 text-lg mb-4">
+                {searchQuery ? 'No briefs match your search.' : dashboardFilter !== 'all' ? `No ${dashboardFilter.replace('-', ' ')} briefs.` : 'No briefs created yet.'}
+              </p>
+              {!searchQuery && dashboardFilter === 'all' && (
                 <button onClick={() => setShowNewBrief(true)}
                   className="bg-sunny-yellow text-black font-semibold px-6 py-3 rounded-lg hover:bg-yellow-400">
                   Create your first brief
@@ -502,69 +587,70 @@ export default function NewBrief() {
               )}
             </div>
           ) : (
-            <div className="space-y-3">
-              {filteredBriefs.map(brief => {
-                const itemCount = brief.items?.length || 0;
-                const channelSet = new Set(brief.items?.map(i => i.channel) || []);
-                const specSet = new Set();
-                brief.items?.forEach(i => {
-                  const key = (i.channel === 'radio' || i.channel === 'tv')
-                    ? (i.specs?.adLength || i.specs?.spotLength || 'unknown')
-                    : (i.specs?.dimensions || 'unknown');
-                  specSet.add(`${i.channel}-${key}`);
-                });
-                const creativeCount = specSet.size;
-
-                // Find earliest due date
-                let earliestDue = null;
-                brief.items?.forEach(i => {
-                  const due = i.dueDate || (i.flightStart ? (() => {
-                    const d = new Date(i.flightStart);
-                    d.setDate(d.getDate() - (brief.dueDateBuffer || 5));
-                    return d.toISOString().split('T')[0];
-                  })() : null);
-                  if (due && (!earliestDue || due < earliestDue)) earliestDue = due;
-                });
-
-                const daysUntil = earliestDue ? Math.ceil((new Date(earliestDue) - new Date()) / (1000 * 60 * 60 * 24)) : null;
-                let urgencyBorder = 'border-white/10';
-                if (daysUntil !== null && daysUntil < 0) urgencyBorder = 'border-red-500/40';
-                else if (daysUntil !== null && daysUntil <= 7) urgencyBorder = 'border-amber-500/30';
-
-                return (
-                  <div key={brief.id}
-                    onClick={() => router.push(`/brief/${brief.id}`)}
-                    className={`bg-white/5 border ${urgencyBorder} rounded-xl p-5 hover:bg-white/[0.07] cursor-pointer transition-all group`}>
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-3">
-                          <h3 className="text-lg font-semibold truncate">{brief.clientName}</h3>
-                          <div className="flex gap-1">
-                            {Array.from(channelSet).map(ch => {
-                              const icons = { ooh: '📍', tv: '📺', radio: '📻', digital: '💻' };
-                              return <span key={ch} className="text-sm" title={ch}>{icons[ch] || '📄'}</span>;
-                            })}
-                          </div>
-                        </div>
-                        <p className="text-sm text-white/50 mt-0.5">{brief.campaignName}</p>
-                        <div className="flex items-center gap-4 mt-2 text-xs text-white/40">
-                          <span>{creativeCount} creative{creativeCount !== 1 ? 's' : ''}</span>
-                          <span>{itemCount} placement{itemCount !== 1 ? 's' : ''}</span>
-                          {brief.createdAt && <span>Created {new Date(brief.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}</span>}
-                        </div>
+            <div className="space-y-4">
+              {clientGroups.map(client => (
+                <div key={client.name} className="bg-white/[0.03] border border-white/10 rounded-xl overflow-hidden">
+                  {/* Client Header */}
+                  <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 bg-gradient-to-br from-sunny-yellow/30 to-sunny-yellow/10 rounded-lg flex items-center justify-center text-sm font-bold text-sunny-yellow">
+                        {(client.name[0] || '?').toUpperCase()}
                       </div>
-                      <div className="text-right flex-shrink-0 ml-4">
-                        {daysUntil !== null && (
-                          <div className={`text-sm font-medium ${daysUntil < 0 ? 'text-red-400' : daysUntil <= 3 ? 'text-red-400' : daysUntil <= 7 ? 'text-amber-400' : 'text-white/50'}`}>
-                            {daysUntil < 0 ? 'Overdue' : daysUntil === 0 ? 'Due today' : `${daysUntil}d until next due`}
-                          </div>
-                        )}
-                        <span className="text-white/20 group-hover:text-white/50 transition-colors text-lg">→</span>
+                      <div>
+                        <h2 className="font-semibold text-lg">{client.name}</h2>
+                        <div className="flex items-center gap-3 text-xs text-white/40 mt-0.5">
+                          <span>{client.briefs.length} brief{client.briefs.length !== 1 ? 's' : ''}</span>
+                          <span>{client.totalPlacements} placement{client.totalPlacements !== 1 ? 's' : ''}</span>
+                          <span>{client.totalCreatives} creative{client.totalCreatives !== 1 ? 's' : ''}</span>
+                        </div>
                       </div>
                     </div>
+                    <div className="flex items-center gap-3">
+                      {client.overdue > 0 && <span className="text-xs px-2 py-1 bg-red-500/20 text-red-400 rounded-full font-medium">{client.overdue} overdue</span>}
+                      {client.dueSoon > 0 && <span className="text-xs px-2 py-1 bg-amber-500/20 text-amber-400 rounded-full font-medium">{client.dueSoon} due soon</span>}
+                    </div>
                   </div>
-                );
-              })}
+
+                  {/* Briefs within this client */}
+                  <div className="divide-y divide-white/5">
+                    {client.briefs.map(brief => {
+                      const s = brief._stats;
+                      let urgencyText = ''; let urgencyColor = 'text-white/40';
+                      if (s.daysUntil !== null && s.daysUntil < 0) { urgencyText = 'Overdue'; urgencyColor = 'text-red-400'; }
+                      else if (s.daysUntil !== null && s.daysUntil === 0) { urgencyText = 'Due today'; urgencyColor = 'text-red-400'; }
+                      else if (s.daysUntil !== null && s.daysUntil <= 3) { urgencyText = `${s.daysUntil}d left`; urgencyColor = 'text-red-400'; }
+                      else if (s.daysUntil !== null && s.daysUntil <= 7) { urgencyText = `${s.daysUntil}d left`; urgencyColor = 'text-amber-400'; }
+                      else if (s.daysUntil !== null) { urgencyText = `${s.daysUntil}d left`; urgencyColor = 'text-white/40'; }
+
+                      return (
+                        <div key={brief.id} onClick={() => router.push(`/brief/${brief.id}`)}
+                          className="px-5 py-3.5 hover:bg-white/[0.04] cursor-pointer transition-all flex items-center justify-between group">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium truncate">{brief.campaignName || 'Untitled Campaign'}</span>
+                              <div className="flex gap-0.5">
+                                {Array.from(s.channels).map(ch => {
+                                  const cfg = CHANNEL_CONFIG[ch];
+                                  return <span key={ch} className="text-xs" title={cfg?.name || ch}>{cfg?.icon || '📄'}</span>;
+                                })}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-white/30 mt-0.5">
+                              <span>{s.creatives} creative{s.creatives !== 1 ? 's' : ''}</span>
+                              <span>{s.placements} placement{s.placements !== 1 ? 's' : ''}</span>
+                              {brief.createdAt && <span>{new Date(brief.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}</span>}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            {urgencyText && <span className={`text-xs font-medium ${urgencyColor}`}>{urgencyText}</span>}
+                            <span className="text-white/15 group-hover:text-white/40 transition-colors">→</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -999,10 +1085,9 @@ export default function NewBrief() {
                         onChange={(e) => setDetectedChannel(e.target.value)}
                         className="w-full bg-sunny-dark border border-gray-600 rounded-lg px-3 py-2 text-sm"
                       >
-                        <option value="ooh">Out of Home</option>
-                        <option value="tv">Television</option>
-                        <option value="radio">Radio</option>
-                        <option value="digital">Digital</option>
+                        {Object.entries(CHANNEL_CONFIG).map(([key, cfg]) => (
+                          <option key={key} value={key}>{cfg.icon} {cfg.name}</option>
+                        ))}
                       </select>
                     </div>
                     <div>
@@ -1019,6 +1104,33 @@ export default function NewBrief() {
                       </select>
                     </div>
                   </div>
+
+                  {/* AI Spot-Check Summary */}
+                  {(() => {
+                    const dims = new Set(); const dates = []; const durations = new Set();
+                    parsedPlacements.forEach(p => {
+                      if (p.dimensions) dims.add(p.dimensions);
+                      if (p.spotLength) durations.add(`${p.spotLength}s`);
+                      if (p.adLength) durations.add(`${p.adLength}s`);
+                      if (p.startDate) dates.push(p.startDate);
+                      if (p.endDate) dates.push(p.endDate);
+                    });
+                    dates.sort();
+                    const earliest = dates[0]; const latest = dates[dates.length - 1];
+                    return (
+                      <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-xs">
+                        <div className="flex items-center gap-2 mb-2 text-blue-400 font-medium"><span>🤖</span> AI Extraction Summary — please verify</div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-white/60">
+                          <div>Channel: <span className="text-white/90">{CHANNEL_CONFIG[detectedChannel]?.name || detectedChannel}</span></div>
+                          <div>Publisher: <span className="text-white/90">{detectedPublisher || '—'}</span></div>
+                          <div>Placements: <span className="text-white/90">{parsedPlacements.length}</span></div>
+                          {earliest && <div>Dates: <span className="text-white/90">{formatDateShort(earliest)} → {formatDateShort(latest)}</span></div>}
+                          {dims.size > 0 && <div className="col-span-2">Dimensions: <span className="text-white/90">{Array.from(dims).join(', ')}</span></div>}
+                          {durations.size > 0 && <div className="col-span-2">Durations: <span className="text-white/90">{Array.from(durations).join(', ')}</span></div>}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   
                   {/* Summary */}
                   <div className="flex items-center justify-between">
