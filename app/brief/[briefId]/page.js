@@ -950,7 +950,18 @@ export default function BriefPage() {
   const [editingBestPractices, setEditingBestPractices] = useState(false);
   const [bestPracticesText, setBestPracticesText] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'table'
+  const [viewMode, setViewMode] = useState('cards');
+  const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved'
+  const saveTimerRef = useRef(null);
+
+  // Wrap any save operation to show indicator
+  async function withSave(fn) {
+    setSaveStatus('saving');
+    try { await fn(); } catch (e) { console.error('Save failed:', e); }
+    setSaveStatus('saved');
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
+  } // 'cards' or 'table'
 
   const briefId = params.briefId || params.id;
 
@@ -1102,48 +1113,36 @@ export default function BriefPage() {
       })) || [];
       return { ...prev, groups: newGroups };
     });
-    try {
-      await fetch(`/api/brief/${briefId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupId: specId, status: newStatus }),
-      });
-    } catch (err) { console.error('Failed to update status:', err); }
+    withSave(() => fetch(`/api/brief/${briefId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId: specId, status: newStatus }),
+    }));
   }
 
   async function handleDueDateBufferChange(newBuffer) {
     setDueDateBuffer(newBuffer);
-    try {
-      await fetch(`/api/brief/${briefId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dueDateBuffer: newBuffer }),
-      });
-    } catch (err) { console.error('Failed to update due date buffer:', err); }
+    withSave(() => fetch(`/api/brief/${briefId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dueDateBuffer: newBuffer }),
+    }));
   }
 
   async function handlePublisherLeadTimeChange(pubKey, days) {
     const updated = { ...publisherLeadTimes, [pubKey]: days };
     setPublisherLeadTimes(updated);
-    try {
-      await fetch(`/api/brief/${briefId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ publisherLeadTimes: updated }),
-      });
-    } catch (err) { console.error('Failed to update publisher lead time:', err); }
+    withSave(() => fetch(`/api/brief/${briefId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ publisherLeadTimes: updated }),
+    }));
   }
 
   async function handleSpecNoteChange(specId, note) {
     const updated = { ...specNotes, [specId]: note };
     setSpecNotes(updated);
-    try {
-      await fetch(`/api/brief/${briefId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ specNotes: updated }),
-      });
-    } catch (err) { console.error('Failed to update spec note:', err); }
+    withSave(() => fetch(`/api/brief/${briefId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ specNotes: updated }),
+    }));
   }
 
   async function handlePlacementEdit(placementId, updates) {
@@ -1154,13 +1153,10 @@ export default function BriefPage() {
       );
       return { ...prev, items: newItems };
     });
-    try {
-      await fetch(`/api/brief/${briefId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ placementId, placementUpdates: updates }),
-      });
-    } catch (err) { console.error('Failed to update placement:', err); }
+    withSave(() => fetch(`/api/brief/${briefId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ placementId, placementUpdates: updates }),
+    }));
   }
 
   async function handlePlacementDelete(placementId) {
@@ -1168,13 +1164,10 @@ export default function BriefPage() {
       if (!prev) return prev;
       return { ...prev, items: prev.items.filter(item => item.id !== placementId) };
     });
-    try {
-      await fetch(`/api/brief/${briefId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ removePlacementId: placementId }),
-      });
-    } catch (err) { console.error('Failed to delete placement:', err); }
+    withSave(() => fetch(`/api/brief/${briefId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ removePlacementId: placementId }),
+    }));
   }
 
   async function handleDeleteCard(placementIds) {
@@ -1457,7 +1450,7 @@ export default function BriefPage() {
           </div>
         )}
 
-        {/* Compact Stats + View Toggle */}
+        {/* Compact Stats + View Toggle + Save Indicator */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-6">
             {[
@@ -1472,8 +1465,23 @@ export default function BriefPage() {
                 {s.tooltip && <div className="hidden group-hover:block absolute -top-8 left-0 px-2 py-1 bg-black rounded text-xs text-white/80 whitespace-nowrap z-10 border border-white/10">{s.tooltip}</div>}
               </div>
             ))}
+            {/* Progress bar */}
+            {stats.totalCreatives > 0 && (
+              <div className="flex items-center gap-2">
+                <div className="w-24 h-2 bg-white/10 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-green-500 to-green-400 rounded-full transition-all duration-500"
+                    style={{ width: `${Math.round((stats.completed / stats.totalCreatives) * 100)}%` }} />
+                </div>
+                <span className="text-xs text-white/40">{Math.round((stats.completed / stats.totalCreatives) * 100)}%</span>
+              </div>
+            )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {/* Save indicator */}
+            <div className={`text-xs transition-opacity duration-300 ${saveStatus === 'idle' ? 'opacity-0' : 'opacity-100'}`}>
+              {saveStatus === 'saving' && <span className="text-white/40">Saving...</span>}
+              {saveStatus === 'saved' && <span className="text-green-400">✓ Saved</span>}
+            </div>
             <label className="flex items-center gap-2 text-xs text-white/40 cursor-pointer select-none">
               <div className={`w-8 h-4 rounded-full transition-colors relative ${viewMode === 'table' ? 'bg-sunny-yellow/50' : 'bg-white/10'}`}
                 onClick={() => setViewMode(v => v === 'cards' ? 'table' : 'cards')}>

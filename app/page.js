@@ -119,11 +119,14 @@ export default function NewBrief() {
     const items = brief.items || [];
     const channelSet = new Set(items.map(i => i.channel));
     const specSet = new Set();
+    const completedSpecSet = new Set();
     items.forEach(i => {
       const key = (i.channel === 'radio' || i.channel === 'tv')
         ? (i.specs?.adLength || i.specs?.spotLength || 'unknown')
         : (i.specs?.dimensions || 'unknown');
-      specSet.add(`${i.channel}-${key}`);
+      const specKey = `${i.channel}-${key}`;
+      specSet.add(specKey);
+      if (i.status === 'delivered' || i.status === 'approved') completedSpecSet.add(specKey);
     });
     let earliestDue = null; let dueSoonCount = 0; let overdueCount = 0; let completedCount = 0;
     items.forEach(i => {
@@ -138,7 +141,8 @@ export default function NewBrief() {
       if (i.status === 'delivered' || i.status === 'approved') completedCount++;
     });
     const daysUntil = earliestDue ? Math.ceil((new Date(earliestDue) - new Date()) / (1000*60*60*24)) : null;
-    return { channels: channelSet, creatives: specSet.size, placements: items.length, earliestDue, daysUntil, dueSoon: dueSoonCount, overdue: overdueCount, completed: completedCount };
+    const completionPct = specSet.size > 0 ? Math.round((completedSpecSet.size / specSet.size) * 100) : 0;
+    return { channels: channelSet, creatives: specSet.size, placements: items.length, earliestDue, daysUntil, dueSoon: dueSoonCount, overdue: overdueCount, completed: completedCount, completionPct };
   }
 
   // Filter and group briefs by client
@@ -667,6 +671,14 @@ export default function NewBrief() {
                                 <span>{s.creatives} creative{s.creatives !== 1 ? 's' : ''}</span>
                                 <span>{s.placements} placement{s.placements !== 1 ? 's' : ''}</span>
                                 {brief.createdAt && <span>{new Date(brief.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}</span>}
+                                {s.creatives > 0 && (
+                                  <div className="flex items-center gap-1.5">
+                                    <div className="w-12 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                                      <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${s.completionPct}%` }} />
+                                    </div>
+                                    <span className={s.completionPct === 100 ? 'text-green-400' : ''}>{s.completionPct}%</span>
+                                  </div>
+                                )}
                               </div>
                             </div>
                             <div className="flex items-center gap-3">
