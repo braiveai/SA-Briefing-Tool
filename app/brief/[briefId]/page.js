@@ -223,7 +223,7 @@ function DueBarChart({ specs, onWeekClick, selectedWeek }) {
 // ============================================
 // SPEC CARD WITH EDIT MODE
 // ============================================
-function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlacementEdit, onPlacementDelete, onDeleteCard, attachments, specNote, onSpecNoteChange, briefId, mergeTargets, onMerge, showBulkSelect, isSelected, onToggleSelect }) {
+function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlacementEdit, onPlacementDelete, onDeleteCard, attachments, specNote, onSpecNoteChange, briefId, mergeTargets, onMerge, showBulkSelect, isSelected, onToggleSelect, clientComment }) {
   const [editingPlacement, setEditingPlacement] = useState(null);
   const [editValues, setEditValues] = useState({});
   const [editingNote, setEditingNote] = useState(false);
@@ -358,6 +358,7 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlace
             <StatusTrack currentStatus={spec.status || 'briefed'} onChange={onStatusChange} groupId={spec.id} />
           </div>
           <div className="flex items-center gap-2">
+            {clientComment?.text && <span className="text-xs px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded-full font-medium" title={clientComment.text}>💬 Feedback</span>}
             <span className={`text-white/30 text-sm transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
           </div>
         </div>
@@ -471,6 +472,20 @@ function SpecCard({ spec, channel, onStatusChange, onExpand, isExpanded, onPlace
             )}
           </div>
           
+          {/* Client Feedback */}
+          {clientComment?.text && (
+            <div className="px-4 py-3 border-t border-blue-500/20 bg-blue-500/10">
+              <div className="flex items-start gap-2">
+                <span className="text-blue-400">💬</span>
+                <div className="flex-1">
+                  <div className="text-xs font-medium text-blue-400 mb-0.5">Client Feedback</div>
+                  <div className="text-sm text-white/70">{clientComment.text}</div>
+                  {clientComment.timestamp && <div className="text-xs text-white/30 mt-1">{new Date(clientComment.timestamp).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Placements List */}
           <div className="border-t border-white/5">
             <div className="max-h-80 overflow-y-auto">
@@ -1138,6 +1153,9 @@ export default function BriefPage() {
     return Array.from(pubs);
   }, [brief]);
 
+  const clientComments = brief?.clientComments || {};
+  const totalComments = Object.keys(clientComments).length;
+
   function toggleSpecExpanded(specId) {
     setExpandedSpecs(prev => {
       const next = new Set(prev);
@@ -1425,6 +1443,10 @@ export default function BriefPage() {
                 className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10" title="Client portal — all briefs for this client (opens new tab)">
                 🏠 Portal
               </button>
+              <button onClick={() => window.open(`/brief/${briefId}/print`, '_blank')}
+                className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10 transition-colors" title="Export as PDF (print-friendly view)">
+                📄 PDF
+              </button>
               <button onClick={handleDuplicateBrief}
                 className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm hover:bg-white/10 transition-colors" title="Duplicate this brief">
                 📋 Clone
@@ -1564,6 +1586,11 @@ export default function BriefPage() {
                     style={{ width: `${Math.round((stats.completed / stats.totalCreatives) * 100)}%` }} />
                 </div>
                 <span className="text-xs text-white/40">{Math.round((stats.completed / stats.totalCreatives) * 100)}%</span>
+              </div>
+            )}
+            {totalComments > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded-full font-medium">💬 {totalComments}</span>
               </div>
             )}
           </div>
@@ -1764,7 +1791,8 @@ export default function BriefPage() {
                         onDeleteCard={handleDeleteCard} attachments={brief.attachments}
                         specNote={specNotes[spec.id]} onSpecNoteChange={handleSpecNoteChange} briefId={briefId}
                         mergeTargets={mergeTargets} onMerge={handleMergeSpecs}
-                        showBulkSelect={showBulkBar} isSelected={selectedSpecs.has(spec.id)} onToggleSelect={toggleSpecSelection} />
+                        showBulkSelect={showBulkBar} isSelected={selectedSpecs.has(spec.id)} onToggleSelect={toggleSpecSelection}
+                        clientComment={clientComments[spec.id]} />
                     );
                   })}
                 </div>

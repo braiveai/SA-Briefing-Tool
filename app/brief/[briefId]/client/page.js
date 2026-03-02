@@ -152,9 +152,11 @@ function DueBarChart({ specs, onWeekClick, selectedWeek }) {
   );
 }
 
-function ClientSpecCard({ spec, channel, onExpand, isExpanded, uploads, onUpload, attachments, specNote }) {
+function ClientSpecCard({ spec, channel, onExpand, isExpanded, uploads, onUpload, attachments, specNote, clientComment, onComment, briefId }) {
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
+  const [showCommentInput, setShowCommentInput] = useState(false);
+  const [commentText, setCommentText] = useState(clientComment?.text || '');
   const daysUntil = spec.earliestDue ? getDaysUntil(spec.earliestDue) : null;
   let urgencyClass = '', urgencyGlow = '';
   if (daysUntil !== null) {
@@ -292,6 +294,35 @@ function ClientSpecCard({ spec, channel, onExpand, isExpanded, uploads, onUpload
               </div>
             )}
           </div>
+          {/* Client Comment / Request Change */}
+          <div className="px-4 py-3 border-t border-white/5">
+            {clientComment?.text && !showCommentInput ? (
+              <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-blue-400 font-medium">💬 Your feedback</span>
+                  <button onClick={() => setShowCommentInput(true)} className="text-xs text-white/30 hover:text-white">Edit</button>
+                </div>
+                <div className="text-sm text-white/70">{clientComment.text}</div>
+                <div className="text-xs text-white/30 mt-1">{clientComment.timestamp ? new Date(clientComment.timestamp).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}</div>
+              </div>
+            ) : showCommentInput ? (
+              <div className="space-y-2">
+                <textarea value={commentText} onChange={e => setCommentText(e.target.value)}
+                  placeholder="Describe the change you need, e.g. 'Can we swap the hero image?' or 'Wrong dates for panel 3'..."
+                  className="w-full bg-white/5 border border-white/20 rounded-lg px-3 py-2 text-sm text-white resize-none placeholder-white/30 focus:border-blue-400/50 focus:outline-none" rows={2} autoFocus />
+                <div className="flex gap-2 justify-end">
+                  <button onClick={() => { setShowCommentInput(false); setCommentText(clientComment?.text || ''); }} className="px-3 py-1 text-xs text-white/50 hover:text-white">Cancel</button>
+                  <button onClick={() => { onComment(spec.id, commentText); setShowCommentInput(false); }}
+                    className="px-3 py-1 text-xs bg-blue-500/20 text-blue-400 rounded font-medium hover:bg-blue-500/30">Send Feedback</button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={() => setShowCommentInput(true)}
+                className="w-full text-left text-xs text-white/30 hover:text-blue-400 transition-colors py-1">
+                💬 Request a change or leave feedback...
+              </button>
+            )}
+          </div>
           <div className="border-t border-white/5">
             <div className="max-h-64 overflow-y-auto">
               {siteFlights.length < spec.placements.length ? (
@@ -344,6 +375,7 @@ export default function ClientBriefPage() {
   const [expandedSpecs, setExpandedSpecs] = useState(new Set());
   const [uploads, setUploads] = useState({});
   const [selectedWeek, setSelectedWeek] = useState(null);
+  const [clientComments, setClientComments] = useState({});
   const briefId = params.briefId || params.id;
   const dueDateBuffer = brief?.dueDateBuffer || 5;
   const publisherLeadTimes = brief?.publisherLeadTimes || {};
@@ -354,12 +386,25 @@ export default function ClientBriefPage() {
       try {
         const res = await fetch(`/api/brief/${briefId}`);
         if (!res.ok) throw new Error('Brief not found');
-        setBrief(await res.json());
+        const data = await res.json();
+        setBrief(data);
+        setClientComments(data.clientComments || {});
       } catch (err) { console.error('Failed to load brief:', err); }
       setLoading(false);
     }
     loadBrief();
   }, [briefId]);
+
+  async function handleClientComment(specId, text) {
+    const updated = { ...clientComments, [specId]: { text, timestamp: new Date().toISOString() } };
+    setClientComments(updated);
+    try {
+      await fetch(`/api/brief/${briefId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientComments: updated }),
+      });
+    } catch (err) { console.error('Failed to save comment:', err); }
+  }
 
   const channelData = useMemo(() => {
     if (!brief?.items) return {};
@@ -517,7 +562,8 @@ export default function ClientBriefPage() {
                     <ClientSpecCard key={spec.id} spec={spec} channel={channelKey}
                       onExpand={toggleSpecExpanded} isExpanded={expandedSpecs.has(spec.id)}
                       uploads={uploads} onUpload={handleUpload} attachments={brief.attachments}
-                      specNote={specNotes[spec.id]} />
+                      specNote={specNotes[spec.id]} clientComment={clientComments[spec.id]}
+                      onComment={handleClientComment} briefId={briefId} />
                   ))}
                 </div>
               </div>

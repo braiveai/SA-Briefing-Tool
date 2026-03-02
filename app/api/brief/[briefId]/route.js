@@ -147,6 +147,7 @@ export async function PATCH(request, { params }) {
     if (updates.publisherLeadTimes) brief.publisherLeadTimes = updates.publisherLeadTimes;
     if (updates.specNotes) brief.specNotes = updates.specNotes;
     if (updates.bestPractices !== undefined) brief.bestPractices = updates.bestPractices;
+    if (updates.clientComments) brief.clientComments = updates.clientComments;
 
     brief.updatedAt = new Date().toISOString();
 
